@@ -1,0 +1,1039 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<script>
+  // Apply saved theme before first paint, so there's no flash of the wrong theme.
+  try {
+    var t = localStorage.getItem('afp_theme');
+    if (t === 'light') document.documentElement.setAttribute('data-theme', 'light');
+  } catch (e) { /* private mode may block localStorage — defaults to dark, harmless */ }
+</script>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>Akash Food Point OS</title>
+<meta name="theme-color" content="#14120F" />
+<meta name="description" content="Offline-first POS, inventory and finance system for Akash Food Point." />
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="icons/icon.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+
+<!-- ===== TOP BAR ===== -->
+<header class="topbar">
+  <div class="topbar__brand">
+    <span class="topbar__mark">AFP</span>
+    <span class="topbar__title"><span id="topbarShopName">Akash Food Point</span> <em>OS</em></span>
+  </div>
+  <div class="topbar__right">
+    <div class="topbar__date" id="todayDate">—</div>
+    <button class="topbar__help" id="settingsBtn" aria-label="Settings">⚙</button>
+    <button class="topbar__help" id="helpBtn" aria-label="How to use">?</button>
+  </div>
+</header>
+
+<!-- ===== MAIN VIEWS ===== -->
+<main id="app">
+
+  <!-- ---------- DASHBOARD ---------- -->
+  <section class="view" id="view-dashboard" data-view="dashboard">
+    <div class="footfall-strip">
+      <button class="tap-btn tap-btn--minus" id="footfallMinus" aria-label="Decrease footfall">&minus;</button>
+      <div class="footfall-strip__mid">
+        <div class="footfall-strip__count" id="footfallCount">0</div>
+        <div class="footfall-strip__label">Footfall Today</div>
+      </div>
+      <button class="tap-btn tap-btn--plus" id="footfallPlus" aria-label="Increase footfall">+</button>
+    </div>
+    <div class="footfall-meta">
+      <span><strong id="footfallBuying">0</strong> Buying</span>
+      <span><strong id="footfallConv">0%</strong> Conversion</span>
+    </div>
+
+    <div class="ticket" id="dashboardTicket">
+      <div class="ticket__row ticket__row--head">
+        <span>TODAY'S SUMMARY</span>
+        <span id="ticketTime">—</span>
+      </div>
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-card__label">Sales</div>
+          <div class="stat-card__value" id="statSales">₹0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card__label">Orders</div>
+          <div class="stat-card__value" id="statOrders">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card__label">AOV</div>
+          <div class="stat-card__value" id="statAOV">₹0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card__label">Est. Profit</div>
+          <div class="stat-card__value stat-card__value--accent" id="statProfit">₹0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card__label">Cash</div>
+          <div class="stat-card__value" id="statCash">₹0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card__label">UPI</div>
+          <div class="stat-card__value" id="statUPI">₹0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card__label">Udhar Out</div>
+          <div class="stat-card__value" id="statUdhar">₹0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card__label">Expenses</div>
+          <div class="stat-card__value" id="statExpenses">₹0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card__label">Purchases</div>
+          <div class="stat-card__value" id="statPurchases">₹0</div>
+        </div>
+        <div class="stat-card stat-card--wide">
+          <div class="stat-card__label">Low Stock</div>
+          <div class="stat-card__value" id="statLowStock">—</div>
+        </div>
+      </div>
+    </div>
+
+    <h2 class="section-heading">Recent Orders</h2>
+    <div id="recentOrdersList" class="order-log"></div>
+  </section>
+
+  <!-- ---------- NEW ORDER ---------- -->
+  <section class="view" id="view-order" data-view="order" hidden>
+    <div class="order-layout">
+      <div class="order-menu">
+        <div class="chip-row" id="categoryChips"></div>
+        <div class="menu-grid" id="menuGrid"></div>
+      </div>
+
+      <aside class="order-ticket" id="orderTicketPanel">
+        <div class="order-ticket__handle" id="ticketHandle">
+          <span class="order-ticket__handle-bar"></span>
+          <span id="ticketSummaryLine">0 items · ₹0</span>
+        </div>
+
+        <div class="order-ticket__body">
+          <div class="field-row">
+            <input type="text" id="custName" placeholder="Customer name (optional)" />
+            <input type="tel" id="custMobile" placeholder="Mobile (optional)" />
+          </div>
+
+          <div class="field-group">
+            <label>Order Source</label>
+            <div class="segmented" id="sourceSeg">
+              <button data-value="Offline" class="active">Offline</button>
+              <button data-value="Zomato">Zomato</button>
+              <button data-value="Swiggy">Swiggy</button>
+            </div>
+          </div>
+
+          <div class="field-group">
+            <label>Payment Method</label>
+            <div class="segmented" id="paymentSeg">
+              <button data-value="Cash" class="active">Cash</button>
+              <button data-value="UPI">UPI</button>
+              <button data-value="Udhar">Udhar</button>
+            </div>
+          </div>
+
+          <div class="cart-list" id="cartList"></div>
+
+          <div class="field-row">
+            <input type="number" id="discountInput" placeholder="Discount ₹" min="0" />
+          </div>
+
+          <div class="ticket-divider"></div>
+
+          <div class="totals-row"><span>Subtotal</span><span id="totalSubtotal">₹0</span></div>
+          <div class="totals-row"><span>Discount</span><span id="totalDiscount">₹0</span></div>
+          <div class="totals-row"><span>Food Cost</span><span id="totalFoodCost">₹0</span></div>
+          <div class="totals-row totals-row--profit"><span>Est. Profit</span><span id="totalProfit">₹0</span></div>
+          <div class="totals-row totals-row--grand"><span>Grand Total</span><span id="totalGrand">₹0</span></div>
+
+          <button class="btn btn--complete" id="completeOrderBtn">Complete Order</button>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ---------- MENU MANAGEMENT ---------- -->
+  <section class="view" id="view-menu" data-view="menu" hidden>
+    <div class="view-header">
+      <h2>Menu Management</h2>
+      <div class="view-header__actions">
+        <button class="btn btn--small" id="addItemBtn">+ Item</button>
+      </div>
+    </div>
+
+    <div class="print-menu-controls">
+      <div class="segmented" id="printModeSeg">
+        <button data-mode="offline" class="active">Offline</button>
+        <button data-mode="online">Online</button>
+        <button data-mode="both">Both</button>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn--complete btn--small" id="downloadMenuPdfBtn">📄 Download Menu PDF</button>
+      <button class="btn btn--ghost btn--small" id="printMenuBtn">🖨 Print Directly</button>
+    </div>
+
+    <div class="chip-row" id="menuMgmtCategoryChips"></div>
+    <div class="btn-row">
+      <button class="btn btn--ghost btn--small" id="addCategoryBtn">+ Category</button>
+    </div>
+    <div class="item-list" id="menuMgmtList"></div>
+  </section>
+
+  <!-- ---------- MORE (Inventory / Purchases / Expenses / Customers) ---------- -->
+  <section class="view" id="view-more" data-view="more" hidden>
+    <div class="segmented segmented--wide" id="moreSubNav">
+      <button data-sub="inventory" class="active">Inventory</button>
+      <button data-sub="purchases">Purchases</button>
+      <button data-sub="expenses">Expenses</button>
+      <button data-sub="customers">Customers</button>
+      <button data-sub="reports">Reports</button>
+      <button data-sub="seasonal">Seasonal Biz</button>
+      <button data-sub="udhar">Udhar</button>
+    </div>
+
+    <!-- INVENTORY -->
+    <div class="sub-panel" id="sub-inventory">
+      <div class="view-header">
+        <h2>Inventory</h2>
+        <button class="btn btn--small" id="addInventoryBtn">+ Item</button>
+      </div>
+      <div class="item-list" id="inventoryList"></div>
+    </div>
+
+    <!-- PURCHASES -->
+    <div class="sub-panel" id="sub-purchases" hidden>
+      <div class="view-header">
+        <h2>Purchase Entry</h2>
+      </div>
+
+      <div class="ticket" id="purchaseSummaryTicket">
+        <div class="ticket__row--head">
+          <span>PURCHASE TOTAL</span>
+          <span id="purchaseSummaryLabel">—</span>
+        </div>
+        <div class="segmented" id="purchasePeriodSeg">
+          <button data-period="today" class="active">Today</button>
+          <button data-period="week">This Week</button>
+          <button data-period="month">This Month</button>
+        </div>
+        <div class="totals-row totals-row--grand" style="margin-top:10px;"><span>Total Spent</span><span id="purchaseSummaryTotal">₹0</span></div>
+        <div id="purchaseSummaryByItem" class="close-rows" style="margin-top:8px;"></div>
+      </div>
+
+      <div class="form-card">
+        <div class="field-row">
+          <div>
+            <label>Date</label>
+            <input type="date" id="pDate" />
+            <span class="date-readout" id="pDateReadout"></span>
+          </div>
+          <div>
+            <label>Supplier</label>
+            <input type="text" id="pSupplier" placeholder="Supplier name" />
+          </div>
+        </div>
+        <label>Item <span class="field-hint">(type any name — existing items autocomplete, new ones get created automatically)</span></label>
+        <div class="item-select-row">
+          <input type="text" id="pItemInput" list="pItemDatalist" placeholder="e.g. Burger Buns" autocomplete="off" />
+          <button type="button" class="btn btn--ghost btn--small" id="pEditItemBtn" hidden>Edit</button>
+        </div>
+        <datalist id="pItemDatalist"></datalist>
+        <div id="pItemMatchHint" class="date-readout" style="margin-bottom:8px;"></div>
+
+        <div class="field-row">
+          <div>
+            <label>Unit</label>
+            <input type="text" id="pItemUnit" list="pUnitDatalist" placeholder="e.g. dozen, kg, pkt" autocomplete="off" />
+            <datalist id="pUnitDatalist">
+              <option value="g"></option>
+              <option value="kg"></option>
+              <option value="ml"></option>
+              <option value="l"></option>
+              <option value="pcs"></option>
+              <option value="pkt"></option>
+              <option value="dozen"></option>
+              <option value="box"></option>
+            </datalist>
+          </div>
+        </div>
+        <div class="field-row">
+          <div>
+            <label>Quantity</label>
+            <input type="number" id="pQty" min="0" />
+          </div>
+          <div>
+            <label>Rate ₹ / unit</label>
+            <input type="number" id="pRate" min="0" />
+          </div>
+        </div>
+        <div class="field-row">
+          <div>
+            <label>Amount ₹</label>
+            <input type="number" id="pAmount" min="0" />
+          </div>
+          <div>
+            <label>Payment Method</label>
+            <select id="pPayment">
+              <option>Cash</option>
+              <option>UPI</option>
+              <option>Udhar</option>
+            </select>
+          </div>
+        </div>
+        <label>Notes</label>
+        <input type="text" id="pNotes" placeholder="Optional" />
+        <button class="btn btn--complete" id="savePurchaseBtn">Save Purchase</button>
+      </div>
+      <h2 class="section-heading">Recent Purchases</h2>
+      <div id="purchaseList" class="order-log"></div>
+    </div>
+
+    <!-- EXPENSES -->
+    <div class="sub-panel" id="sub-expenses" hidden>
+      <div class="view-header">
+        <h2>Expenses</h2>
+      </div>
+      <div class="ticket" id="expenseMonthTicket">
+        <div class="ticket__row--head">
+          <span>THIS MONTH</span>
+          <span id="expenseMonthLabel">—</span>
+        </div>
+        <div class="totals-row totals-row--grand"><span>Total Spent</span><span id="expenseMonthTotal">₹0</span></div>
+        <div id="expenseMonthByCategory" class="close-rows" style="margin-top:8px;"></div>
+      </div>
+      <div class="form-card">
+        <label>Category</label>
+        <select id="eCategory">
+          <option>Raw Material</option>
+          <option>Gas</option>
+          <option>Electricity</option>
+          <option>Packaging</option>
+          <option>Cleaning</option>
+          <option>Repairs</option>
+          <option>Advertising</option>
+          <option>Miscellaneous</option>
+          <option value="__other">Other (type below)</option>
+        </select>
+        <input type="text" id="eCategoryOther" placeholder="Enter category name" hidden style="margin-bottom:10px;" />
+        <div class="field-row">
+          <div>
+            <label>Date</label>
+            <input type="date" id="eDate" />
+            <span class="date-readout" id="eDateReadout"></span>
+          </div>
+          <div>
+            <label>Amount ₹</label>
+            <input type="number" id="eAmount" min="0" />
+          </div>
+        </div>
+        <label>Notes</label>
+        <input type="text" id="eNotes" placeholder="e.g. Gas cylinder refill" />
+        <button class="btn btn--complete" id="saveExpenseBtn">Save Expense</button>
+      </div>
+      <h2 class="section-heading">Recent Expenses</h2>
+      <div id="expenseList" class="order-log"></div>
+    </div>
+
+    <!-- CUSTOMERS -->
+    <div class="sub-panel" id="sub-customers" hidden>
+      <div class="view-header">
+        <h2>Customers</h2>
+      </div>
+      <div class="item-list" id="customerList"></div>
+    </div>
+
+    <!-- REPORTS -->
+    <div class="sub-panel" id="sub-reports" hidden>
+      <div class="view-header">
+        <h2>Reports</h2>
+      </div>
+
+      <h2 class="section-heading">Today vs Yesterday</h2>
+      <div class="ticket"><div id="cmpDay" class="compare-table"></div></div>
+
+      <h2 class="section-heading">This Month vs Last Month</h2>
+      <div class="ticket"><div id="cmpMonth" class="compare-table"></div></div>
+
+      <h2 class="section-heading">Last 14 Days — Sales Trend</h2>
+      <div class="ticket">
+        <canvas id="salesTrendChart" width="600" height="180" style="width:100%; height:auto; display:block;"></canvas>
+      </div>
+
+      <h2 class="section-heading">Monthly Detail</h2>
+      <label>Month</label>
+      <input type="month" id="rMonth" />
+
+      <div class="ticket" style="margin-top:14px;">
+        <div class="ticket__row--head">
+          <span>SUMMARY</span>
+          <span id="rMonthLabel">—</span>
+        </div>
+        <div class="stat-grid">
+          <div class="stat-card">
+            <div class="stat-card__label">Sales</div>
+            <div class="stat-card__value" id="rSales">₹0</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card__label">Orders</div>
+            <div class="stat-card__value" id="rOrders">0</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card__label">Profit</div>
+            <div class="stat-card__value stat-card__value--accent" id="rProfit">₹0</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card__label">Expenses</div>
+            <div class="stat-card__value" id="rExpenses">₹0</div>
+          </div>
+        </div>
+      </div>
+
+      <h2 class="section-heading">Top Selling Items</h2>
+      <div class="ticket"><div id="rTopItems" class="close-rows"></div></div>
+
+      <h2 class="section-heading">Sales by Category</h2>
+      <div class="ticket"><div id="rCategoryBreakdown" class="close-rows"></div></div>
+
+      <h2 class="section-heading">Customers This Month</h2>
+      <div class="ticket"><div id="rCustomers" class="close-rows"></div></div>
+    </div>
+
+    <!-- SEASONAL BUSINESS — a separate product line, own purchase/sale/summary, not linked to the food menu/inventory -->
+    <div class="sub-panel" id="sub-seasonal" hidden>
+      <div class="view-header">
+        <h2>Seasonal Business</h2>
+      </div>
+      <div class="segmented" id="seasonalModeSeg">
+        <button data-mode="purchase" class="active">Log Purchase</button>
+        <button data-mode="sale">Log Sale</button>
+        <button data-mode="summary">Summary</button>
+      </div>
+
+      <!-- Log Purchase -->
+      <div id="seasonalPurchaseMode">
+        <div class="form-card">
+          <div class="field-row">
+            <div>
+              <label>Date</label>
+              <input type="date" id="spDate" />
+              <span class="date-readout" id="spDateReadout"></span>
+            </div>
+            <div>
+              <label>Supplier</label>
+              <input type="text" id="spSupplier" placeholder="Optional" />
+            </div>
+          </div>
+          <label>Item</label>
+          <input type="text" id="spItemInput" list="spItemDatalist" placeholder="e.g. Kites, Sweets, Coolers" autocomplete="off" />
+          <datalist id="spItemDatalist"></datalist>
+          <div class="field-row">
+            <div>
+              <label>Unit</label>
+              <input type="text" id="spUnit" list="pUnitDatalist" placeholder="e.g. pcs, kg, box" autocomplete="off" />
+            </div>
+            <div>
+              <label>Quantity</label>
+              <input type="number" id="spQty" min="0" />
+            </div>
+          </div>
+          <div class="field-row">
+            <div>
+              <label>Rate ₹ / unit</label>
+              <input type="number" id="spRate" min="0" />
+            </div>
+            <div>
+              <label>Amount ₹</label>
+              <input type="number" id="spAmount" min="0" />
+            </div>
+          </div>
+          <label>Notes</label>
+          <input type="text" id="spNotes" placeholder="Optional" />
+          <label>Payment Method</label>
+          <select id="spPayment">
+            <option>Cash</option>
+            <option>UPI</option>
+            <option>Udhar</option>
+          </select>
+          <button class="btn btn--complete" id="saveSeasonalPurchaseBtn" style="margin-top:10px;">Save Purchase</button>
+        </div>
+        <h2 class="section-heading">Recent Purchases</h2>
+        <div id="seasonalPurchaseList" class="order-log"></div>
+      </div>
+
+      <!-- Log Sale -->
+      <div id="seasonalSaleMode" hidden>
+        <div class="form-card">
+          <div class="field-row">
+            <div>
+              <label>Date</label>
+              <input type="date" id="ssDate" />
+              <span class="date-readout" id="ssDateReadout"></span>
+            </div>
+            <div>
+              <label>Customer <span class="field-hint">(optional)</span></label>
+              <input type="text" id="ssCustomer" placeholder="Optional" />
+            </div>
+          </div>
+          <label>Mobile <span class="field-hint">(optional — links to the Udhar report if this customer also orders food)</span></label>
+          <input type="tel" id="ssMobile" placeholder="Optional" />
+          <label>Item</label>
+          <input type="text" id="ssItemInput" list="spItemDatalist" placeholder="e.g. Kites, Sweets, Coolers" autocomplete="off" />
+          <div class="field-row">
+            <div>
+              <label>Unit</label>
+              <input type="text" id="ssUnit" list="pUnitDatalist" placeholder="e.g. pcs, kg, box" autocomplete="off" />
+            </div>
+            <div>
+              <label>Quantity</label>
+              <input type="number" id="ssQty" min="0" />
+            </div>
+          </div>
+          <div class="field-row">
+            <div>
+              <label>Price ₹ / unit</label>
+              <input type="number" id="ssRate" min="0" />
+            </div>
+            <div>
+              <label>Amount ₹</label>
+              <input type="number" id="ssAmount" min="0" />
+            </div>
+          </div>
+          <label>Payment Method</label>
+          <select id="ssPayment">
+            <option>Cash</option>
+            <option>UPI</option>
+            <option>Udhar</option>
+          </select>
+          <button class="btn btn--complete" id="saveSeasonalSaleBtn" style="margin-top:10px;">Save Sale</button>
+        </div>
+        <h2 class="section-heading">Recent Sales</h2>
+        <div id="seasonalSaleList" class="order-log"></div>
+      </div>
+
+      <!-- Summary -->
+      <div id="seasonalSummaryMode" hidden>
+        <div class="ticket">
+          <div class="ticket__row--head"><span>THIS MONTH</span><span id="seasonalMonthLabel">—</span></div>
+          <div class="stat-grid">
+            <div class="stat-card"><div class="stat-card__label">Sales</div><div class="stat-card__value" id="seasonalMonthSales">₹0</div></div>
+            <div class="stat-card"><div class="stat-card__label">Purchases</div><div class="stat-card__value" id="seasonalMonthPurchases">₹0</div></div>
+            <div class="stat-card"><div class="stat-card__label">Profit</div><div class="stat-card__value stat-card__value--accent" id="seasonalMonthProfit">₹0</div></div>
+          </div>
+        </div>
+        <div class="ticket" style="margin-top:12px;">
+          <div class="ticket__row--head"><span>ALL TIME</span><span></span></div>
+          <div class="stat-grid">
+            <div class="stat-card"><div class="stat-card__label">Sales</div><div class="stat-card__value" id="seasonalAllSales">₹0</div></div>
+            <div class="stat-card"><div class="stat-card__label">Purchases</div><div class="stat-card__value" id="seasonalAllPurchases">₹0</div></div>
+            <div class="stat-card"><div class="stat-card__label">Profit</div><div class="stat-card__value stat-card__value--accent" id="seasonalAllProfit">₹0</div></div>
+          </div>
+        </div>
+        <h2 class="section-heading">Sales by Item (This Month)</h2>
+        <div class="ticket"><div id="seasonalByItem" class="close-rows"></div></div>
+      </div>
+    </div>
+
+    <!-- UDHAR — consolidated credit report across both businesses: who owes you, who you owe -->
+    <div class="sub-panel" id="sub-udhar" hidden>
+      <div class="view-header">
+        <h2>Udhar</h2>
+      </div>
+      <p class="settings-section__hint">Covers both the food shop and Seasonal Biz — anything logged as Udhar in either section shows up here.</p>
+
+      <h2 class="section-heading">Customers Who Owe You</h2>
+      <div class="item-list" id="udharCustomerList"></div>
+
+      <h2 class="section-heading">Suppliers You Owe</h2>
+      <div class="item-list" id="udharSupplierList"></div>
+    </div>
+  </section>
+
+  <!-- ---------- CLOSE DAY ---------- -->
+  <section class="view" id="view-close" data-view="close" hidden>
+    <h2 class="section-heading">Daily Closing</h2>
+    <div class="ticket" id="closeTicket">
+      <div class="ticket__row ticket__row--head">
+        <span>END OF DAY REPORT</span>
+        <span id="closeDate">—</span>
+      </div>
+      <div class="close-rows" id="closeRows"></div>
+    </div>
+    <button class="btn btn--complete" id="closeDayBtn">Close Day</button>
+    <div class="closed-history">
+      <h2 class="section-heading">Past Closings</h2>
+      <div id="closedHistoryList" class="order-log"></div>
+    </div>
+  </section>
+
+</main>
+
+<!-- ===== ITEM EDITOR MODAL (Menu Management) ===== -->
+<div class="modal-backdrop" id="itemModalBackdrop" hidden>
+  <div class="modal">
+    <div class="modal__head">
+      <span id="itemModalTitle">New Item</span>
+      <button class="modal__close" id="itemModalClose">&times;</button>
+    </div>
+    <div class="modal__body">
+      <label>Item Name</label>
+      <input type="text" id="fItemName" />
+
+      <label>Category</label>
+      <select id="fItemCategory"></select>
+
+      <label class="toggle-row">
+        <span>Has Half &amp; Full sizes</span>
+        <input type="checkbox" id="fHasHalf" />
+      </label>
+
+      <div class="size-block">
+        <div class="size-block__label">Full <span>(used if this item has no Half size)</span></div>
+        <div class="field-row">
+          <div>
+            <label>Offline Price ₹</label>
+            <input type="number" id="fOfflinePrice" min="0" />
+          </div>
+          <div>
+            <label>Online Price ₹</label>
+            <input type="number" id="fOnlinePrice" min="0" />
+          </div>
+        </div>
+        <div class="field-row">
+          <div>
+            <label>Food Cost ₹</label>
+            <input type="number" id="fFoodCost" min="0" />
+          </div>
+          <div>
+            <label>Packaging Cost ₹</label>
+            <input type="number" id="fPackagingCost" min="0" />
+          </div>
+        </div>
+        <div class="pack-toggle-row">
+          <label class="toggle-row"><span>Charge on Offline</span><input type="checkbox" id="fPackOffline" /></label>
+          <label class="toggle-row"><span>Charge on Online</span><input type="checkbox" id="fPackOnline" checked /></label>
+        </div>
+      </div>
+
+      <div class="size-block" id="halfSizeBlock" hidden>
+        <div class="size-block__label">Half</div>
+        <div class="field-row">
+          <div>
+            <label>Offline Price ₹</label>
+            <input type="number" id="fHalfOfflinePrice" min="0" />
+          </div>
+          <div>
+            <label>Online Price ₹</label>
+            <input type="number" id="fHalfOnlinePrice" min="0" />
+          </div>
+        </div>
+        <div class="field-row">
+          <div>
+            <label>Food Cost ₹</label>
+            <input type="number" id="fHalfFoodCost" min="0" />
+          </div>
+          <div>
+            <label>Packaging Cost ₹</label>
+            <input type="number" id="fHalfPackagingCost" min="0" />
+          </div>
+        </div>
+      </div>
+
+      <label class="toggle-row">
+        <span>Available</span>
+        <input type="checkbox" id="fAvailable" checked />
+      </label>
+
+      <div class="recipe-section">
+        <div class="empty-hint" style="padding:0 0 8px;">Recipe cost below applies to the Full size.</div>
+        <div class="recipe-section__head">
+          <label style="margin:0;">Recipe (optional)</label>
+          <button type="button" class="btn btn--ghost btn--small" id="addRecipeRowBtn">+ Ingredient</button>
+        </div>
+        <div id="recipeRows" class="recipe-rows"></div>
+        <div class="recipe-cost-row">
+          <span>Recipe Cost</span>
+          <span id="recipeCostValue">₹0</span>
+          <button type="button" class="btn btn--ghost btn--small" id="useRecipeCostBtn">Use as Food Cost</button>
+        </div>
+        <div class="empty-hint" id="recipeNoInventoryHint" hidden>Add inventory items first (More → Inventory) to build a recipe.</div>
+      </div>
+    </div>
+    <div class="modal__foot">
+      <button class="btn btn--ghost" id="fDeleteBtn">Delete</button>
+      <button class="btn btn--complete" id="fSaveBtn">Save Item</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== CATEGORY MODAL ===== -->
+<div class="modal-backdrop" id="catModalBackdrop" hidden>
+  <div class="modal modal--small">
+    <div class="modal__head">
+      <span>New Category</span>
+      <button class="modal__close" id="catModalClose">&times;</button>
+    </div>
+    <div class="modal__body">
+      <label>Category Name</label>
+      <input type="text" id="fCategoryName" placeholder="e.g. Burger" />
+    </div>
+    <div class="modal__foot">
+      <button class="btn btn--complete" id="catSaveBtn">Add Category</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== INVENTORY ITEM MODAL ===== -->
+<div class="modal-backdrop" id="invModalBackdrop" hidden>
+  <div class="modal">
+    <div class="modal__head">
+      <span id="invModalTitle">New Inventory Item</span>
+      <button class="modal__close" id="invModalClose">&times;</button>
+    </div>
+    <div class="modal__body">
+      <label>Item Name</label>
+      <input type="text" id="iName" placeholder="e.g. Oil, Buns, Cheese" />
+
+      <div class="field-row">
+        <div>
+          <label>Unit</label>
+          <select id="iUnit">
+            <option>g</option>
+            <option>kg</option>
+            <option>ml</option>
+            <option>l</option>
+            <option>pcs</option>
+            <option>pkt</option>
+            <option value="__other">Other (type below)</option>
+          </select>
+          <input type="text" id="iUnitOther" placeholder="e.g. box, dozen" hidden style="margin-top:6px;" />
+        </div>
+        <div id="iStockLeftWrap" hidden>
+          <label>Stock Left</label>
+          <input type="text" id="iStockLeftDisplay" disabled />
+        </div>
+      </div>
+
+      <div class="field-row">
+        <div>
+          <label id="iStockInputLabel">Opening Stock</label>
+          <input type="number" id="iStockInput" min="0" placeholder="0" />
+        </div>
+        <div>
+          <label>Minimum Stock <span class="field-hint">(low stock alert)</span></label>
+          <input type="number" id="iMinStock" min="0" />
+        </div>
+      </div>
+
+      <div class="field-row">
+        <div>
+          <label>Purchase Cost ₹/unit</label>
+          <input type="number" id="iPurchaseCost" min="0" />
+        </div>
+        <div>
+          <label>Supplier</label>
+          <input type="text" id="iSupplier" placeholder="Optional" />
+        </div>
+      </div>
+
+      <label class="toggle-row">
+        <span>Recipes use a smaller unit than I buy in</span>
+        <input type="checkbox" id="iHasConversion" />
+      </label>
+      <div class="size-block" id="iConversionBlock" hidden>
+        <div class="size-block__label">e.g. buy Burger Buns by the dozen, but recipes use 1 piece per burger</div>
+        <div class="field-row">
+          <div>
+            <label>Recipe Unit</label>
+            <input type="text" id="iRecipeUnit" list="iRecipeUnitDatalist" placeholder="e.g. piece, g, ml" autocomplete="off" />
+            <datalist id="iRecipeUnitDatalist">
+              <option value="piece"></option>
+              <option value="g"></option>
+              <option value="ml"></option>
+              <option value="slice"></option>
+            </datalist>
+          </div>
+          <div>
+            <label>Recipe Units per 1 <span id="iConversionUnitLabel">Purchase Unit</span></label>
+            <input type="number" id="iUnitsPerPurchase" min="1" placeholder="e.g. 12" />
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="modal__foot">
+      <button class="btn btn--ghost" id="iDeleteBtn">Delete</button>
+      <button class="btn btn--complete" id="iSaveBtn">Save Item</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== CUSTOMER / UDHAR LEDGER MODAL ===== -->
+<div class="modal-backdrop" id="custModalBackdrop" hidden>
+  <div class="modal">
+    <div class="modal__head">
+      <span id="custModalName">Customer</span>
+      <button class="modal__close" id="custModalClose">&times;</button>
+    </div>
+    <div class="modal__body">
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-card__label">Visits</div>
+          <div class="stat-card__value" id="custVisits">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card__label">Total Spend</div>
+          <div class="stat-card__value" id="custSpend">₹0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card__label">Avg Bill</div>
+          <div class="stat-card__value" id="custAvg">₹0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card__label">Udhar Balance</div>
+          <div class="stat-card__value stat-card__value--accent" id="custBalance">₹0</div>
+        </div>
+      </div>
+
+      <h2 class="section-heading">Pending Entries</h2>
+      <p class="settings-section__hint">Tap Cleared on an entry once they've paid for it specifically.</p>
+      <div id="custPendingList" class="order-log"></div>
+
+      <div class="field-row" style="margin-top:14px;">
+        <div>
+          <label>Or record a lump payment ₹ <span class="field-hint">(not tied to one entry)</span></label>
+          <input type="number" id="custPaymentAmount" min="0" />
+        </div>
+        <div style="display:flex; align-items:flex-end;">
+          <button class="btn btn--complete" id="custPaymentBtn" style="margin-top:0;">Add Payment</button>
+        </div>
+      </div>
+
+      <h2 class="section-heading">Payment History</h2>
+      <div id="custPaymentHistory" class="order-log"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== SUPPLIER / PAYABLE LEDGER MODAL ===== -->
+<div class="modal-backdrop" id="supModalBackdrop" hidden>
+  <div class="modal">
+    <div class="modal__head">
+      <span id="supModalName">Supplier</span>
+      <button class="modal__close" id="supModalClose">&times;</button>
+    </div>
+    <div class="modal__body">
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-card__label">Total Purchased (Udhar)</div>
+          <div class="stat-card__value" id="supTotal">₹0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card__label">You Owe</div>
+          <div class="stat-card__value stat-card__value--accent" id="supBalance">₹0</div>
+        </div>
+      </div>
+
+      <h2 class="section-heading">Pending Entries</h2>
+      <p class="settings-section__hint">Tap Cleared on an entry once you've paid it off specifically.</p>
+      <div id="supPendingList" class="order-log"></div>
+
+      <div class="field-row" style="margin-top:14px;">
+        <div>
+          <label>Or record a lump payment ₹ <span class="field-hint">(not tied to one entry)</span></label>
+          <input type="number" id="supPaymentAmount" min="0" />
+        </div>
+        <div style="display:flex; align-items:flex-end;">
+          <button class="btn btn--complete" id="supPaymentBtn" style="margin-top:0;">Add Payment</button>
+        </div>
+      </div>
+
+      <h2 class="section-heading">Payment History</h2>
+      <div id="supPaymentHistory" class="order-log"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== PAST CLOSING DETAIL MODAL ===== -->
+<div class="modal-backdrop" id="closingDetailBackdrop" hidden>
+  <div class="modal">
+    <div class="modal__head">
+      <span id="closingDetailTitle">Day</span>
+      <button class="modal__close" id="closingDetailClose">&times;</button>
+    </div>
+    <div class="modal__body">
+      <p class="settings-section__hint" id="closingDetailNote" hidden>This day was closed before Offline/Online split and Customers Attended were tracked, so those show as best-effort estimates.</p>
+      <div id="closingDetailRows" class="close-rows"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== SETTINGS MODAL ===== -->
+<div class="modal-backdrop" id="settingsModalBackdrop" hidden>
+  <div class="modal modal--small">
+    <div class="modal__head">
+      <span>Settings</span>
+      <button class="modal__close" id="settingsModalClose">&times;</button>
+    </div>
+    <div class="modal__body">
+      <div class="settings-section">
+        <div class="settings-section__title">Shop Details</div>
+        <label>Shop Name</label>
+        <input type="text" id="sShopName" placeholder="Akash Food Point" />
+        <label>Currency Symbol</label>
+        <input type="text" id="sCurrency" placeholder="₹" maxlength="4" style="max-width:70px;" />
+        <button class="btn btn--complete btn--small" id="saveShopDetailsBtn" style="margin-top:8px;">Save</button>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section__title">Appearance</div>
+        <div class="segmented" id="themeSeg">
+          <button data-theme="dark" class="active">Dark</button>
+          <button data-theme="light">Light</button>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section__title">Backup &amp; Restore</div>
+        <p class="settings-section__hint">All your data lives only in this device's browser storage. Export a backup regularly (e.g. weekly) — if you clear browser data, switch phones, or reinstall, this is the only way to get everything back.</p>
+        <button class="btn btn--complete" id="exportBackupBtn">⬇ Export Backup (JSON)</button>
+        <button class="btn btn--ghost" id="restoreBackupBtn" style="margin-top:8px;">⬆ Restore from Backup</button>
+        <input type="file" id="restoreFileInput" accept="application/json" hidden />
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section__title">Export to Excel (CSV)</div>
+        <p class="settings-section__hint">For opening in Excel/Google Sheets to sort, filter, or analyze — not for restoring into the app (use Backup above for that).</p>
+        <div class="csv-export-row">
+          <button class="btn btn--ghost btn--small" id="exportOrdersCsvBtn">Orders</button>
+          <button class="btn btn--ghost btn--small" id="exportPurchasesCsvBtn">Purchases</button>
+          <button class="btn btn--ghost btn--small" id="exportExpensesCsvBtn">Expenses</button>
+        </div>
+      </div>
+
+      <p class="reset-warning">
+        <strong>Reset All Data</strong><br/>
+        Permanently deletes everything on this device — menu, orders, inventory, purchases, expenses, customers, closings. This cannot be undone. Use this if you were testing with sample data and want to start clean.
+      </p>
+      <button class="btn btn--danger" id="resetDataBtn">Reset All Data</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== HELP / HOW TO USE MODAL ===== -->
+<div class="modal-backdrop" id="helpModalBackdrop" hidden>
+  <div class="modal">
+    <div class="modal__head">
+      <span>How to Use — Akash Food Point OS</span>
+      <button class="modal__close" id="helpModalClose">&times;</button>
+    </div>
+    <div class="modal__body help-body">
+
+      <h3>Dashboard</h3>
+      <p>Your at-a-glance summary for <strong>today only</strong> (resets each morning — history lives in Close Day).</p>
+      <ul>
+        <li><strong>Footfall</strong> — tap + / − every time someone walks in. Tap it up manually; it also auto-increases when you complete an order for a walk-in who wasn't already counted.</li>
+        <li><strong>Buying / Conversion</strong> — Buying = number of completed orders today. Conversion = Buying ÷ Footfall, i.e. what share of people who walked in actually bought something.</li>
+        <li><strong>Sales</strong> — sum of Grand Total across today's completed orders.</li>
+        <li><strong>Orders</strong> — how many orders completed today. <strong>AOV</strong> (Average Order Value) = Sales ÷ Orders.</li>
+        <li><strong>Est. Profit</strong> — today's (Sales − Food/Packaging Cost) minus today's logged Expenses.</li>
+        <li><strong>Cash / UPI</strong> — today's sales split by payment method chosen at checkout.</li>
+        <li><strong>Udhar Out</strong> — total still owed by customers <strong>across all time</strong> (all udhar orders ever, minus all payments ever recorded) — not just today.</li>
+        <li><strong>Expenses / Purchases</strong> — today's totals from those two sections.</li>
+        <li><strong>Low Stock</strong> — lists any Inventory item whose Stock Left has dropped to or below its Minimum Stock.</li>
+      </ul>
+
+      <h3>New Order</h3>
+      <p>Tap the <strong>+</strong> on an item to add one, <strong>−</strong> to remove one. Items with Half/Full sizes show two rows. Long-press a row to type an exact quantity. Set Source, Payment Method, and an optional Discount, then Complete Order — this saves the order, updates today's Sales/Profit, and (if the item has a Recipe) deducts ingredients from Inventory automatically.</p>
+
+      <h3>Menu Management</h3>
+      <p>Add Categories, then Items inside them. Each item needs a Full price (offline + online) and a Food Cost — that's what profit is calculated from. Packaging Cost only applies to Online orders (Zomato/Swiggy) since dine-in/counter orders don't need a box or bag — the New Order screen automatically drops packaging cost from the profit calc when Source is set to Offline. Turn on "Has Half & Full sizes" to sell both portions separately. The optional Recipe section links an item to Inventory ingredients so stock deducts automatically when it sells, and can auto-fill Food Cost for you. The Offline/Online/Both toggle plus "Download Menu PDF" build a clean printable menu — Offline for what's stuck in your shop, Online to match what's listed on Zomato/Swiggy, or Both to show both prices side by side.</p>
+
+      <h3>More → Inventory</h3>
+      <p>Tracks raw materials (oil, buns, packaging, etc).</p>
+      <ul>
+        <li><strong>Stock Left</strong> — the current running balance. You don't edit this number directly.</li>
+        <li><strong>Opening Stock</strong> (new item) / <strong>Add New Stock</strong> (existing item) — the number you type here is <em>added</em> to Stock Left when you save. Stock also drops automatically whenever a recipe-linked menu item is sold.</li>
+        <li><strong>Minimum Stock</strong> — not a stock amount, it's an alert threshold. When Stock Left falls to or below this, it shows up under "Low Stock" on the Dashboard.</li>
+        <li><strong>Purchase Cost</strong> — cost per unit, used to calculate Recipe Cost on menu items. It updates automatically to your latest Purchase Entry rate.</li>
+        <li><strong>"Recipes use a smaller unit than I buy in"</strong> — turn this on when your buying unit and cooking unit differ, e.g. you buy Burger Buns by the dozen but a recipe needs 1 piece. Set Recipe Unit ("piece") and how many of those per 1 purchase unit ("12"). Recipe rows for this item then ask for pieces, not dozens, and selling stock correctly drops fractions of a dozen behind the scenes.</li>
+      </ul>
+      <p>Tap the <strong>×</strong> on any item to delete it — useful for removing something added by mistake.</p>
+
+      <h3>More → Purchases</h3>
+      <p>Log every time you buy raw materials. Just type the item name — existing items (like Burger Buns, Noodles Pack, Vegetables) autocomplete as you type; typing a name that doesn't exist yet creates it automatically when you save. Once you've typed a name that matches an existing item, an "Edit" button appears next to it to open that item's full Inventory details. Enter Quantity and Rate (Amount fills in automatically) and save — that adds the quantity to Stock Left and updates Purchase Cost. The card at the top switches between Today / This Week / This Month totals, with a breakdown by item, so recurring buys (like gas or vegetables bought several times a month) visibly add up over time. Made a mistake? Tap the <strong>×</strong> on any entry in Recent Purchases — it deletes the entry and automatically removes the stock it had added back out of Inventory.</p>
+
+      <h3>More → Expenses</h3>
+      <p>Log every expense as its own entry — if you buy gas 3 times a month, that's 3 separate entries with their own dates. Nothing needs combining manually. The "This Month" card at the top adds up everything logged this calendar month, broken down by category, so you can see the running total build up. Today's expenses reduce today's Profit on the Dashboard and in Close Day. Tap the <strong>×</strong> on any entry in Recent Expenses to delete a mistaken entry.</p>
+
+      <h3>More → Customers</h3>
+      <p>Built automatically from any order where you entered a name or mobile number — no manual setup needed. Shows visits, total spend, average bill, and Udhar balance. Tap "Ledger" on a customer to see their payment history and record a payment against what they owe (this reduces their Udhar balance and the Dashboard's Udhar Out figure).</p>
+
+      <h3>More → Reports</h3>
+      <p>Opens with Today vs Yesterday and This Month vs Last Month comparisons (with % change, green for up, red for down), a 14-day sales trend chart, then a Monthly Detail section where you pick any month — past or present — to see that month's Sales, Orders, Profit and Expenses, Top Selling Items, a Sales-by-Category breakdown, and every named customer who ordered that month with visits and spend.</p>
+
+      <h3>More → Seasonal Biz</h3>
+      <p>A completely separate ledger for a different, seasonal product line — not linked to your food menu, recipes, or inventory. <strong>Log Purchase</strong> and <strong>Log Sale</strong> work like Purchases in the main app: type any item name (it remembers names you've used before), quantity, unit, and rate — amount fills in automatically. Both now have a Payment Method, so marking something Udhar shows up in the Udhar tab. <strong>Summary</strong> shows This Month and All Time totals for Sales, Purchases, and Profit, plus a breakdown of what sold this month. Use the × on any entry to delete a mistake.</p>
+
+      <h3>More → Udhar</h3>
+      <p>One place to see all credit across both businesses. <strong>Customers Who Owe You</strong> combines anyone marked Udhar on a food order or a Seasonal Biz sale — enter the same mobile number in both places and they merge into one balance instead of two. Each row shows the combined total plus a breakdown ("Food ₹70 · Seasonal ₹60") so you can see both businesses at a glance without opening the ledger. <strong>Suppliers You Owe</strong> works the same way, combining food and Seasonal purchases marked Udhar. Tap "Ledger" on either to open it. Inside, <strong>Pending Entries</strong> lists each individual Udhar purchase or sale separately, labeled by which business it's from, with its own date — tap <strong>Cleared</strong> on one once it's paid, and it's stamped with today's date and drops out of the balance. If a payment doesn't map to one specific entry (a partial or advance payment), use the lump payment field below it instead.</p>
+
+      <h3>Close Day</h3>
+      <p>A full snapshot of today so far — Footfall, Customers Attended, Orders, Average Order Value, Sales split by Offline vs Online (Zomato/Swiggy), Cash/UPI/Udhar split, Expenses, Purchases, and Profit. Tapping "Close Day" saves this snapshot to the Past Closings history below. You can re-close later in the day to update the saved snapshot if more orders come in. Tap <strong>View</strong> on any past closing to see its full breakdown, not just the sales total.</p>
+
+      <h3>Settings (⚙)</h3>
+      <p><strong>Shop Details</strong> — change your shop name or currency symbol here; it updates the top bar, printed menu, and PDF menu everywhere at once. <strong>Appearance</strong> — switch between Dark (default, easier to read under bright counter lighting) and Light. All your data lives only in this browser on this device — nothing is backed up automatically. <strong>Export Backup</strong> downloads everything as a JSON file; do this regularly. <strong>Restore from Backup</strong> loads a previously exported file back in, replacing whatever is currently on the device — use this if you switch phones or reinstall. <strong>Export to Excel (CSV)</strong> downloads Orders, Purchases, or Expenses as a spreadsheet file for sorting/analysis — for viewing only, not for restoring into the app. <strong>Reset All Data</strong> permanently wipes everything to start clean.</p>
+
+    </div>
+  </div>
+</div>
+
+<!-- ===== TOAST ===== -->
+<div class="toast" id="toast"></div>
+
+<!-- ===== BOTTOM TAB BAR ===== -->
+<nav class="tabbar">
+  <button class="tabbar__btn active" data-view="dashboard">
+    <span class="tabbar__icon">▤</span><span>Dashboard</span>
+  </button>
+  <button class="tabbar__btn" data-view="order">
+    <span class="tabbar__icon">＋</span><span>New Order</span>
+  </button>
+  <button class="tabbar__btn" data-view="menu">
+    <span class="tabbar__icon">▦</span><span>Menu</span>
+  </button>
+  <button class="tabbar__btn" data-view="more">
+    <span class="tabbar__icon">☰</span><span>More</span>
+  </button>
+  <button class="tabbar__btn" data-view="close">
+    <span class="tabbar__icon">✔</span><span>Close Day</span>
+  </button>
+</nav>
+
+<!-- ===== PRINTABLE MENU (built from live menu data, shown only when printing) ===== -->
+<div id="printMenuArea">
+  <div class="print-menu__header">
+    <div class="print-menu__brand" id="printMenuBrand">Akash Food Point</div>
+    <div class="print-menu__rule"></div>
+    <div class="print-menu__tagline" id="printMenuTagline">MENU</div>
+  </div>
+  <div class="print-menu__categories" id="printMenuCategories"></div>
+  <div class="print-menu__footer">Prices for dine-in / takeaway · Menu subject to change without notice</div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
