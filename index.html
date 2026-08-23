@@ -123,6 +123,10 @@
         </div>
 
         <div class="order-ticket__body">
+          <div class="edit-order-banner" id="editOrderBanner" hidden>
+            <span id="editOrderBannerText">Editing order</span>
+            <button type="button" class="btn btn--ghost btn--small" id="cancelEditOrderBtn">Cancel Edit</button>
+          </div>
           <div class="field-row">
             <input type="text" id="custName" placeholder="Customer name (optional)" />
             <input type="tel" id="custMobile" placeholder="Mobile (optional)" />
@@ -148,8 +152,20 @@
 
           <div class="cart-list" id="cartList"></div>
 
-          <div class="field-row">
-            <input type="number" id="discountInput" placeholder="Discount ₹" min="0" />
+          <div id="discountEntryWrap" hidden>
+            <div class="field-group">
+              <label>Discount Entry <span class="field-hint">(useful when online platforms apply their own variable discount)</span></label>
+              <div class="segmented" id="discountModeSeg">
+                <button data-mode="discount" class="active">Discount ₹</button>
+                <button data-mode="received">Amount Received ₹</button>
+              </div>
+            </div>
+            <div class="field-row" id="discountFieldWrap">
+              <input type="number" id="discountInput" placeholder="Discount ₹" min="0" />
+            </div>
+            <div class="field-row" id="receivedFieldWrap" hidden>
+              <input type="number" id="receivedInput" placeholder="What you actually received ₹" min="0" />
+            </div>
           </div>
 
           <div class="ticket-divider"></div>
@@ -298,6 +314,7 @@
         <label>Notes</label>
         <input type="text" id="pNotes" placeholder="Optional" />
         <button class="btn btn--complete" id="savePurchaseBtn">Save Purchase</button>
+        <button class="btn btn--ghost btn--small" id="cancelEditPurchaseBtn" hidden style="margin-top:8px;">Cancel Edit</button>
       </div>
       <h2 class="section-heading">Recent Purchases</h2>
       <div id="purchaseList" class="order-log"></div>
@@ -344,6 +361,7 @@
         <label>Notes</label>
         <input type="text" id="eNotes" placeholder="e.g. Gas cylinder refill" />
         <button class="btn btn--complete" id="saveExpenseBtn">Save Expense</button>
+        <button class="btn btn--ghost btn--small" id="cancelEditExpenseBtn" hidden style="margin-top:8px;">Cancel Edit</button>
       </div>
       <h2 class="section-heading">Recent Expenses</h2>
       <div id="expenseList" class="order-log"></div>
@@ -374,9 +392,31 @@
         <canvas id="salesTrendChart" width="600" height="180" style="width:100%; height:auto; display:block;"></canvas>
       </div>
 
-      <h2 class="section-heading">Monthly Detail</h2>
-      <label>Month</label>
-      <input type="month" id="rMonth" />
+      <h2 class="section-heading">Detail Report</h2>
+      <div class="segmented" id="reportPeriodSeg">
+        <button data-period="day">Day</button>
+        <button data-period="week">Week</button>
+        <button data-period="month" class="active">Month</button>
+        <button data-period="year">Year</button>
+      </div>
+
+      <div id="rPeriodDayWrap" hidden>
+        <label>Date</label>
+        <input type="date" id="rPeriodDay" />
+        <span class="date-readout" id="rPeriodDayReadout"></span>
+      </div>
+      <div id="rPeriodWeekWrap" hidden>
+        <label>Week</label>
+        <input type="week" id="rPeriodWeek" />
+      </div>
+      <div id="rPeriodMonthWrap">
+        <label>Month</label>
+        <input type="month" id="rPeriodMonth" />
+      </div>
+      <div id="rPeriodYearWrap" hidden>
+        <label>Year</label>
+        <input type="number" id="rPeriodYear" min="2020" max="2100" />
+      </div>
 
       <div class="ticket" style="margin-top:14px;">
         <div class="ticket__row--head">
@@ -409,8 +449,36 @@
       <h2 class="section-heading">Sales by Category</h2>
       <div class="ticket"><div id="rCategoryBreakdown" class="close-rows"></div></div>
 
-      <h2 class="section-heading">Customers This Month</h2>
+      <h2 class="section-heading">Customers</h2>
       <div class="ticket"><div id="rCustomers" class="close-rows"></div></div>
+
+      <h2 class="section-heading">Business Insights</h2>
+      <p class="settings-section__hint">Based on recent activity — not tied to the period picker above.</p>
+
+      <div class="ticket">
+        <div class="ticket__row--head"><span>REGULARS GONE QUIET</span><span></span></div>
+        <div id="insightRepeatCustomers" class="close-rows"></div>
+      </div>
+
+      <div class="ticket">
+        <div class="ticket__row--head"><span>RUNNING LOW SOON</span><span>based on last 7 days' usage</span></div>
+        <div id="insightLowStock" class="close-rows"></div>
+      </div>
+
+      <div class="ticket">
+        <div class="ticket__row--head"><span>PROFIT MARGIN BY ITEM</span><span>last 30 days</span></div>
+        <div id="insightMargins" class="close-rows"></div>
+      </div>
+
+      <div class="ticket">
+        <div class="ticket__row--head"><span>BEST / WORST DAY OF WEEK</span><span>all-time avg</span></div>
+        <div id="insightWeekday" class="close-rows"></div>
+      </div>
+
+      <div class="ticket">
+        <div class="ticket__row--head"><span>EXPENSE ALERTS</span><span>this month vs last</span></div>
+        <div id="insightExpenses" class="close-rows"></div>
+      </div>
     </div>
 
     <!-- SEASONAL BUSINESS — a separate product line, own purchase/sale/summary, not linked to the food menu/inventory -->
@@ -470,6 +538,7 @@
             <option>Udhar</option>
           </select>
           <button class="btn btn--complete" id="saveSeasonalPurchaseBtn" style="margin-top:10px;">Save Purchase</button>
+          <button class="btn btn--ghost btn--small" id="cancelEditSeasonalPurchaseBtn" hidden style="margin-top:8px;">Cancel Edit</button>
         </div>
         <h2 class="section-heading">Recent Purchases</h2>
         <div id="seasonalPurchaseList" class="order-log"></div>
@@ -520,6 +589,7 @@
             <option>Udhar</option>
           </select>
           <button class="btn btn--complete" id="saveSeasonalSaleBtn" style="margin-top:10px;">Save Sale</button>
+          <button class="btn btn--ghost btn--small" id="cancelEditSeasonalSaleBtn" hidden style="margin-top:8px;">Cancel Edit</button>
         </div>
         <h2 class="section-heading">Recent Sales</h2>
         <div id="seasonalSaleList" class="order-log"></div>
@@ -545,6 +615,12 @@
         </div>
         <h2 class="section-heading">Sales by Item (This Month)</h2>
         <div class="ticket"><div id="seasonalByItem" class="close-rows"></div></div>
+
+        <h2 class="section-heading">Export</h2>
+        <div class="csv-export-row">
+          <button class="btn btn--small" id="exportSeasonalPurchasesCsvBtn">⬇ Purchases CSV</button>
+          <button class="btn btn--small" id="exportSeasonalSalesCsvBtn">⬇ Sales CSV</button>
+        </div>
       </div>
     </div>
 
@@ -574,6 +650,7 @@
       <div class="close-rows" id="closeRows"></div>
     </div>
     <button class="btn btn--complete" id="closeDayBtn">Close Day</button>
+
     <div class="closed-history">
       <h2 class="section-heading">Past Closings</h2>
       <div id="closedHistoryList" class="order-log"></div>
@@ -596,13 +673,8 @@
       <label>Category</label>
       <select id="fItemCategory"></select>
 
-      <label class="toggle-row">
-        <span>Has Half &amp; Full sizes</span>
-        <input type="checkbox" id="fHasHalf" />
-      </label>
-
       <div class="size-block">
-        <div class="size-block__label">Full <span>(used if this item has no Half size)</span></div>
+        <div class="size-block__label">Full <span>(base price — always shown)</span></div>
         <div class="field-row">
           <div>
             <label>Offline Price ₹</label>
@@ -629,29 +701,9 @@
         </div>
       </div>
 
-      <div class="size-block" id="halfSizeBlock" hidden>
-        <div class="size-block__label">Half</div>
-        <div class="field-row">
-          <div>
-            <label>Offline Price ₹</label>
-            <input type="number" id="fHalfOfflinePrice" min="0" />
-          </div>
-          <div>
-            <label>Online Price ₹</label>
-            <input type="number" id="fHalfOnlinePrice" min="0" />
-          </div>
-        </div>
-        <div class="field-row">
-          <div>
-            <label>Food Cost ₹</label>
-            <input type="number" id="fHalfFoodCost" min="0" />
-          </div>
-          <div>
-            <label>Packaging Cost ₹</label>
-            <input type="number" id="fHalfPackagingCost" min="0" />
-          </div>
-        </div>
-      </div>
+      <label>Other Portions / Prices <span class="field-hint">(Half, Quarter, Piece, a ₹20 special — anything)</span></label>
+      <div id="portionsList"></div>
+      <button type="button" class="btn btn--ghost btn--small" id="addPortionBtn" style="margin-top:4px;">+ Add Portion</button>
 
       <label class="toggle-row">
         <span>Available</span>
@@ -877,6 +929,20 @@
     <div class="modal__body">
       <p class="settings-section__hint" id="closingDetailNote" hidden>This day was closed before Offline/Online split and Customers Attended were tracked, so those show as best-effort estimates.</p>
       <div id="closingDetailRows" class="close-rows"></div>
+      <button class="btn btn--complete" id="closingDetailSaveBtn" hidden style="margin-top:12px;">Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== ORDER DETAIL MODAL ===== -->
+<div class="modal-backdrop" id="orderDetailBackdrop" hidden>
+  <div class="modal">
+    <div class="modal__head">
+      <span id="orderDetailTitle">Order</span>
+      <button class="modal__close" id="orderDetailClose">&times;</button>
+    </div>
+    <div class="modal__body">
+      <div id="orderDetailRows" class="close-rows"></div>
     </div>
   </div>
 </div>
@@ -889,6 +955,7 @@
       <button class="modal__close" id="settingsModalClose">&times;</button>
     </div>
     <div class="modal__body">
+      <p class="settings-section__hint" style="margin-top:0;">App Version: <strong id="appVersionLabel">—</strong> <span style="opacity:0.7;">— if this doesn't match what Claude tells you, the update hasn't loaded yet</span></p>
       <div class="settings-section">
         <div class="settings-section__title">Shop Details</div>
         <label>Shop Name</label>
@@ -957,10 +1024,10 @@
       </ul>
 
       <h3>New Order</h3>
-      <p>Tap the <strong>+</strong> on an item to add one, <strong>−</strong> to remove one. Items with Half/Full sizes show two rows. Long-press a row to type an exact quantity. Set Source, Payment Method, and an optional Discount, then Complete Order — this saves the order, updates today's Sales/Profit, and (if the item has a Recipe) deducts ingredients from Inventory automatically.</p>
+      <p>Tap the <strong>+</strong> on an item to add one, <strong>−</strong> to remove one. Items with Half/Full sizes show two rows. Long-press a row to type an exact quantity. Set Source and Payment Method, then either enter a <strong>Discount ₹</strong> amount, or switch to <strong>Amount Received ₹</strong> and just type what actually landed — useful for Zomato/Swiggy orders where their own ad/promo system applies a different, unpredictable discount each time, so you don't have to work out the exact discount yourself. Tap Complete Order to save it, update today's Sales/Profit, and (if the item has a Recipe) deduct ingredients from Inventory automatically. Forgot an item? On the Dashboard, tap <strong>Edit</strong> on that order in Recent Orders — it reopens with everything pre-filled so you can add what's missing and tap Update Order. Inventory and totals adjust to the difference correctly; footfall isn't double-counted.</p>
 
       <h3>Menu Management</h3>
-      <p>Add Categories, then Items inside them. Each item needs a Full price (offline + online) and a Food Cost — that's what profit is calculated from. Packaging Cost only applies to Online orders (Zomato/Swiggy) since dine-in/counter orders don't need a box or bag — the New Order screen automatically drops packaging cost from the profit calc when Source is set to Offline. Turn on "Has Half & Full sizes" to sell both portions separately. The optional Recipe section links an item to Inventory ingredients so stock deducts automatically when it sells, and can auto-fill Food Cost for you. The Offline/Online/Both toggle plus "Download Menu PDF" build a clean printable menu — Offline for what's stuck in your shop, Online to match what's listed on Zomato/Swiggy, or Both to show both prices side by side.</p>
+      <p>Add Categories, then Items inside them. Each item needs a Full price (offline + online) and a Food Cost — that's what profit is calculated from. Packaging Cost only applies to Online orders (Zomato/Swiggy) since dine-in/counter orders don't need a box or bag — the New Order screen automatically drops packaging cost from the profit calc when Source is set to Offline. Need more than just Half/Full — a Quarter, a per-piece price, or even a ₹10/₹20 special you sometimes give? Tap <strong>+ Add Portion</strong>, name it whatever you like, and give it its own price and food cost. Each shows as its own row in New Order. If a portion uses noticeably less of the recipe, set its <strong>Recipe Factor</strong> below 1 (0.5 for half the ingredients, 0.15 for a fifth, etc.) so Inventory deducts the right amount — leave it at 1 if unsure. The optional Recipe section links an item to Inventory ingredients so stock deducts automatically when it sells, and can auto-fill Food Cost for you. The Offline/Online/Both toggle plus "Download Menu PDF" build a clean printable menu, listing every portion you've set up.</p>
 
       <h3>More → Inventory</h3>
       <p>Tracks raw materials (oil, buns, packaging, etc).</p>
@@ -974,25 +1041,25 @@
       <p>Tap the <strong>×</strong> on any item to delete it — useful for removing something added by mistake.</p>
 
       <h3>More → Purchases</h3>
-      <p>Log every time you buy raw materials. Just type the item name — existing items (like Burger Buns, Noodles Pack, Vegetables) autocomplete as you type; typing a name that doesn't exist yet creates it automatically when you save. Once you've typed a name that matches an existing item, an "Edit" button appears next to it to open that item's full Inventory details. Enter Quantity and Rate (Amount fills in automatically) and save — that adds the quantity to Stock Left and updates Purchase Cost. The card at the top switches between Today / This Week / This Month totals, with a breakdown by item, so recurring buys (like gas or vegetables bought several times a month) visibly add up over time. Made a mistake? Tap the <strong>×</strong> on any entry in Recent Purchases — it deletes the entry and automatically removes the stock it had added back out of Inventory.</p>
+      <p>Log every time you buy raw materials. Just type the item name — existing items (like Burger Buns, Noodles Pack, Vegetables) autocomplete as you type; typing a name that doesn't exist yet creates it automatically when you save. Once you've typed a name that matches an existing item, an "Edit" button appears next to it to open that item's full Inventory details. Enter Quantity and Rate (Amount fills in automatically) and save — that adds the quantity to Stock Left and updates Purchase Cost. The card at the top switches between Today / This Week / This Month totals, with a breakdown by item, so recurring buys (like gas or vegetables bought several times a month) visibly add up over time. Made a mistake? Tap <strong>Edit</strong> on any entry in Recent Purchases to correct the quantity or rate — Stock Left adjusts automatically to the difference, not just added on top. Tap the <strong>×</strong> to delete it entirely, which removes the stock it had added back out of Inventory.</p>
 
       <h3>More → Expenses</h3>
-      <p>Log every expense as its own entry — if you buy gas 3 times a month, that's 3 separate entries with their own dates. Nothing needs combining manually. The "This Month" card at the top adds up everything logged this calendar month, broken down by category, so you can see the running total build up. Today's expenses reduce today's Profit on the Dashboard and in Close Day. Tap the <strong>×</strong> on any entry in Recent Expenses to delete a mistaken entry.</p>
+      <p>Log every expense as its own entry — if you buy gas 3 times a month, that's 3 separate entries with their own dates. Nothing needs combining manually. The "This Month" card at the top adds up everything logged this calendar month, broken down by category, so you can see the running total build up. Today's expenses reduce today's Profit on the Dashboard and in Close Day. Tap <strong>Edit</strong> on any entry in Recent Expenses to correct it, or the <strong>×</strong> to delete a mistaken entry.</p>
 
       <h3>More → Customers</h3>
       <p>Built automatically from any order where you entered a name or mobile number — no manual setup needed. Shows visits, total spend, average bill, and Udhar balance. Tap "Ledger" on a customer to see their payment history and record a payment against what they owe (this reduces their Udhar balance and the Dashboard's Udhar Out figure).</p>
 
       <h3>More → Reports</h3>
-      <p>Opens with Today vs Yesterday and This Month vs Last Month comparisons (with % change, green for up, red for down), a 14-day sales trend chart, then a Monthly Detail section where you pick any month — past or present — to see that month's Sales, Orders, Profit and Expenses, Top Selling Items, a Sales-by-Category breakdown, and every named customer who ordered that month with visits and spend.</p>
+      <p>Opens with Today vs Yesterday and This Month vs Last Month comparisons, a 14-day sales trend chart, then a <strong>Detail Report</strong> — switch between Day / Week / Month / Year at the top, pick the specific one you want, and Sales/Orders/Profit/Expenses/Top Items/Category breakdown/Customers all update for that exact period.</p>
 
       <h3>More → Seasonal Biz</h3>
-      <p>A completely separate ledger for a different, seasonal product line — not linked to your food menu, recipes, or inventory. <strong>Log Purchase</strong> and <strong>Log Sale</strong> work like Purchases in the main app: type any item name (it remembers names you've used before), quantity, unit, and rate — amount fills in automatically. Both now have a Payment Method, so marking something Udhar shows up in the Udhar tab. <strong>Summary</strong> shows This Month and All Time totals for Sales, Purchases, and Profit, plus a breakdown of what sold this month. Use the × on any entry to delete a mistake.</p>
+      <p>A completely separate ledger for a different, seasonal product line — not linked to your food menu, recipes, or inventory. <strong>Log Purchase</strong> and <strong>Log Sale</strong> work like Purchases in the main app: type any item name (it remembers names you've used before), quantity, unit, and rate — amount fills in automatically. Both have a Payment Method, so marking something Udhar shows up in the Udhar tab. <strong>Summary</strong> shows This Month and All Time totals for Sales, Purchases, and Profit, plus a breakdown of what sold this month. Tap <strong>Edit</strong> on any entry to correct it, or the × to delete a mistake.</p>
 
       <h3>More → Udhar</h3>
       <p>One place to see all credit across both businesses. <strong>Customers Who Owe You</strong> combines anyone marked Udhar on a food order or a Seasonal Biz sale — enter the same mobile number in both places and they merge into one balance instead of two. Each row shows the combined total plus a breakdown ("Food ₹70 · Seasonal ₹60") so you can see both businesses at a glance without opening the ledger. <strong>Suppliers You Owe</strong> works the same way, combining food and Seasonal purchases marked Udhar. Tap "Ledger" on either to open it. Inside, <strong>Pending Entries</strong> lists each individual Udhar purchase or sale separately, labeled by which business it's from, with its own date — tap <strong>Cleared</strong> on one once it's paid, and it's stamped with today's date and drops out of the balance. If a payment doesn't map to one specific entry (a partial or advance payment), use the lump payment field below it instead.</p>
 
       <h3>Close Day</h3>
-      <p>A full snapshot of today so far — Footfall, Customers Attended, Orders, Average Order Value, Sales split by Offline vs Online (Zomato/Swiggy), Cash/UPI/Udhar split, Expenses, Purchases, and Profit. Tapping "Close Day" saves this snapshot to the Past Closings history below. You can re-close later in the day to update the saved snapshot if more orders come in. Tap <strong>View</strong> on any past closing to see its full breakdown, not just the sales total.</p>
+      <p>A full snapshot of today so far — Footfall, Customers Attended, Orders, Average Order Value, Sales split by Offline vs Online (Zomato/Swiggy), Cash/UPI/Udhar split, Expenses, Purchases, and Profit. Tapping "Close Day" saves this snapshot to the Past Closings history below. You can re-close later in the day to update the saved snapshot if more orders come in. On any past closing, tap <strong>View</strong> for a read-only breakdown, or <strong>Edit</strong> to correct any number directly if something was recorded wrong.</p>
 
       <h3>Settings (⚙)</h3>
       <p><strong>Shop Details</strong> — change your shop name or currency symbol here; it updates the top bar, printed menu, and PDF menu everywhere at once. <strong>Appearance</strong> — switch between Dark (default, easier to read under bright counter lighting) and Light. All your data lives only in this browser on this device — nothing is backed up automatically. <strong>Export Backup</strong> downloads everything as a JSON file; do this regularly. <strong>Restore from Backup</strong> loads a previously exported file back in, replacing whatever is currently on the device — use this if you switch phones or reinstall. <strong>Export to Excel (CSV)</strong> downloads Orders, Purchases, or Expenses as a spreadsheet file for sorting/analysis — for viewing only, not for restoring into the app. <strong>Reset All Data</strong> permanently wipes everything to start clean.</p>
