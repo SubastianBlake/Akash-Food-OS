@@ -25,6 +25,7 @@
   // innerHTML in dozens of places — escape it here once rather than at every call site.
   const rupee = (n) => `${escapeHtml(currencySymbol)}${Math.round(n || 0).toLocaleString('en-IN')}`;
   const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const APP_VERSION = 'v28'; // bump alongside sw.js CACHE_NAME every round — shown in Settings so updates can be verified, not guessed
 
   // Every render function below builds HTML with template strings for speed and
   // readability. Any value that came from a free-text field the user typed
@@ -223,9 +224,18 @@
     activePurchasePeriod: 'today',
     seasonalMode: 'purchase',
     lastCartGrand: null,
+    discountMode: 'discount',
+    editingOrderId: null,
+    editingOrderSnapshot: null,
+    editingExpenseId: null,
+    editingPurchaseId: null,
+    editingSeasonalPurchaseId: null,
+    editingSeasonalSaleId: null,
+    editingClosingDate: null,
     printMode: 'offline',
     editingInventoryId: null,
     recipeDraft: [], // [{inventoryId, qty}] while editing an item
+    portionsDraft: [], // [{id, label, offlinePrice, onlinePrice, foodCost, recipeFactor}] extra portions while editing an item
     activeCustomerKey: null,
     allOrders: [],
     allExpenses: [],
@@ -374,6 +384,12 @@
       list.innerHTML = '<div class="order-log__empty">No orders yet today. Tap New Order to start billing.</div>';
     } else {
       list.innerHTML = state.todayOrders.slice(0, 12).map(orderRowHTML).join('');
+      list.querySelectorAll('[data-order-id]').forEach((btn) => {
+        btn.addEventListener('click', () => openOrderForEdit(btn.dataset.orderId));
+      });
+      list.querySelectorAll('[data-detail-id]').forEach((btn) => {
+        btn.addEventListener('click', () => openOrderDetail(btn.dataset.detailId));
+      });
     }
   }
 
@@ -392,6 +408,8 @@
           </span>
         </div>
         <div class="order-row__amount">${rupee(o.grandTotal)}</div>
+        <button class="order-row__edit-order" data-detail-id="${o.id}">Details</button>
+        <button class="order-row__edit-order" data-order-id="${o.id}">Edit</button>
       </div>`;
   }
 
@@ -409,26 +427,49 @@
   document.getElementById('footfallMinus').addEventListener('click', () => bumpFootfall(-1));
 
   /* ---------------- NEW ORDER ---------------- */
-  const HALF_SUFFIX = '::half';
-  const cartKey = (itemId, size) => (size === 'half' ? itemId + HALF_SUFFIX : itemId);
-  const parseCartKey = (key) => key.endsWith(HALF_SUFFIX)
-    ? { itemId: key.slice(0, -HALF_SUFFIX.length), size: 'half' }
-    : { itemId: key, size: 'full' };
+  const cartKey = (itemId, portionId) => `${itemId}::${portionId}`;
+  const parseCartKey = (key) => {
+    const idx = key.lastIndexOf('::');
+    return { itemId: key.slice(0, idx), size: key.slice(idx + 2) };
+  };
 
-  function itemPrice(item, size = 'full') {
-    if (size === 'half') {
-      return state.source === 'Offline' ? (item.halfOfflinePrice || 0) : (item.halfOnlinePrice || 0);
+  // Custom named portions (Quarter/Half/Full/Piece/anything, each own price) — falls
+  // back to the old hasHalf/half* fields for items saved before this existed, so
+  // nothing on an existing menu breaks. New items use item.portions directly.
+  function getItemPortions(item) {
+    if (item.portions && item.portions.length) return item.portions;
+    const full = {
+      id: 'full', label: 'Full',
+      offlinePrice: item.offlinePrice || 0, onlinePrice: item.onlinePrice || 0,
+      foodCost: item.foodCost || 0, recipeFactor: 1,
+    };
+    if (item.hasHalf) {
+      const half = {
+        id: 'half', label: 'Half',
+        offlinePrice: item.halfOfflinePrice || 0, onlinePrice: item.halfOnlinePrice || 0,
+        foodCost: item.halfFoodCost || 0, recipeFactor: 0.5,
+      };
+      return [half, full];
     }
-    return state.source === 'Offline' ? item.offlinePrice : item.onlinePrice;
+    return [full];
   }
-  function itemUnitCost(item, size = 'full') {
+  function findPortion(item, portionId) {
+    const portions = getItemPortions(item);
+    return portions.find((p) => p.id === portionId) || portions[portions.length - 1];
+  }
+
+  function itemPrice(item, portionId = 'full') {
+    const p = findPortion(item, portionId);
+    return state.source === 'Offline' ? (p.offlinePrice || 0) : (p.onlinePrice || 0);
+  }
+  function itemUnitCost(item, portionId = 'full') {
     // Per-item toggle now, not hardcoded: chargePackagingOffline/Online default
     // match old behavior (off/on) for items saved before this existed.
     const chargePackaging = state.source === 'Offline'
       ? item.chargePackagingOffline === true
       : item.chargePackagingOnline !== false;
-    if (size === 'half') return (item.halfFoodCost || 0) + (chargePackaging ? (item.halfPackagingCost || 0) : 0);
-    return (item.foodCost || 0) + (chargePackaging ? (item.packagingCost || 0) : 0);
+    const p = findPortion(item, portionId);
+    return (p.foodCost || 0) + (chargePackaging ? (item.packagingCost || 0) : 0);
   }
 
   // Deduct recipe ingredients from inventory when an order is completed (Used tracking).
@@ -439,7 +480,7 @@
     for (const line of orderItems) {
       const item = state.items.find((i) => i.id === line.itemId);
       if (!item || !item.recipe || !item.recipe.length) continue;
-      const factor = line.size === 'half' ? 0.5 : 1;
+      const factor = findPortion(item, line.size).recipeFactor || 1;
       for (const ing of item.recipe) {
         const invItem = state.inventory.find((i) => i.id === ing.inventoryId);
         if (!invItem) continue;
@@ -448,6 +489,28 @@
         const perPurchase = invItem.unitsPerPurchase || 1;
         const consumedInPurchaseUnits = (ing.qty * line.qty * factor) / perPurchase;
         invItem.currentStock = Math.max(0, (invItem.currentStock || 0) - consumedInPurchaseUnits);
+        await dbPut('inventory', invItem);
+        touched = true;
+      }
+    }
+    if (touched) await refreshInventory();
+  }
+
+  // Puts recipe ingredients back into inventory — used when editing an order,
+  // to undo its original deduction before applying the (possibly different) new one.
+  async function reverseInventoryForOrder(orderItems) {
+    let touched = false;
+    await refreshInventory();
+    for (const line of orderItems) {
+      const item = state.items.find((i) => i.id === line.itemId);
+      if (!item || !item.recipe || !item.recipe.length) continue;
+      const factor = findPortion(item, line.size).recipeFactor || 1;
+      for (const ing of item.recipe) {
+        const invItem = state.inventory.find((i) => i.id === ing.inventoryId);
+        if (!invItem) continue;
+        const perPurchase = invItem.unitsPerPurchase || 1;
+        const restoredInPurchaseUnits = (ing.qty * line.qty * factor) / perPurchase;
+        invItem.currentStock = (invItem.currentStock || 0) + restoredInPurchaseUnits;
         await dbPut('inventory', invItem);
         touched = true;
       }
@@ -477,14 +540,15 @@
     });
   }
 
-  function sizeRowHTML(item, size) {
-    const key = cartKey(item.id, size);
+  function sizeRowHTML(item, portion) {
+    const key = cartKey(item.id, portion.id);
     const qty = state.cart[key] || 0;
-    const price = itemPrice(item, size);
+    const price = itemPrice(item, portion.id);
+    const showTag = getItemPortions(item).length > 1;
     return `
       <div class="size-row" data-key="${key}">
         <div class="size-row__info">
-          ${item.hasHalf ? `<span class="size-row__tag">${size === 'half' ? 'Half' : 'Full'}</span>` : ''}
+          ${showTag ? `<span class="size-row__tag">${escapeHtml(portion.label)}</span>` : ''}
           <span class="size-row__price">${rupee(price)}</span>
         </div>
         <div class="stepper">
@@ -506,16 +570,32 @@
       return;
     }
     grid.innerHTML = items.map((item) => {
-      const inCart = item.hasHalf
-        ? (state.cart[cartKey(item.id, 'full')] || state.cart[cartKey(item.id, 'half')])
-        : state.cart[cartKey(item.id, 'full')];
+      const portions = getItemPortions(item);
+      const inCart = portions.some((p) => state.cart[cartKey(item.id, p.id)]);
       return `
         <div class="menu-item-card ${inCart ? 'in-cart' : ''} ${item.available ? '' : 'menu-item-card--unavailable'}">
-          <span class="menu-item-card__name">${escapeHtml(item.name)}</span>
-          ${sizeRowHTML(item, 'full')}
-          ${item.hasHalf ? sizeRowHTML(item, 'half') : ''}
+          <div class="menu-item-card__head">
+            <span class="menu-item-card__name">${escapeHtml(item.name)}</span>
+            <button type="button" class="sold-out-toggle ${item.available ? '' : 'sold-out-toggle--off'}" data-toggle-avail="${item.id}">
+              ${item.available ? 'Sold Out' : 'Back In Stock'}
+            </button>
+          </div>
+          ${portions.map((p) => sizeRowHTML(item, p)).join('')}
         </div>`;
     }).join('');
+
+    grid.querySelectorAll('[data-toggle-avail]').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.toggleAvail;
+        const item = state.items.find((i) => i.id === id);
+        if (!item) return;
+        item.available = !item.available;
+        await dbPut('items', item);
+        await refreshCategoriesAndItems();
+        renderMenuGrid();
+      });
+    });
 
     grid.querySelectorAll('.stepper__btn').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -548,7 +628,7 @@
     const item = state.items.find((i) => i.id === itemId);
     if (!item) return;
     const current = state.cart[key] || 0;
-    const label = size === 'half' ? `${item.name} (Half)` : item.name;
+    const portion = findPortion(item, size); const label = portion.label === 'Full' ? item.name : `${item.name} (${portion.label})`;
     const val = window.prompt(`Set quantity for ${label}`, current);
     if (val === null) return;
     const n = Math.max(0, parseInt(val, 10) || 0);
@@ -556,6 +636,20 @@
     else state.cart[key] = n;
     renderMenuGrid();
     renderCartAndTotals();
+  }
+
+  // Single source of truth for discount vs received-amount math, used by both the
+  // live totals preview and the actual order-save — so they can never disagree.
+  function computeDiscountAndGrand(subtotal) {
+    if (state.discountMode === 'received') {
+      const received = document.getElementById('receivedInput').value;
+      if (received === '') return { discount: 0, grand: subtotal };
+      const grand = Math.max(0, parseFloat(received) || 0);
+      const discount = Math.max(0, subtotal - grand);
+      return { discount, grand };
+    }
+    const discount = Math.max(0, parseInt(document.getElementById('discountInput').value, 10) || 0);
+    return { discount, grand: Math.max(0, subtotal - discount) };
   }
 
   function renderCartAndTotals() {
@@ -569,7 +663,7 @@
         const item = state.items.find((i) => i.id === itemId);
         if (!item) return '';
         const qty = state.cart[key];
-        const label = size === 'half' ? `${item.name} (Half)` : item.name;
+        const portion = findPortion(item, size); const label = portion.label === 'Full' ? item.name : `${item.name} (${portion.label})`;
         return `
           <div class="cart-row" data-key="${key}">
             <span class="cart-row__name">${escapeHtml(label)}</span>
@@ -607,8 +701,7 @@
       foodCostTotal += itemUnitCost(item, size) * qty;
       itemCount += qty;
     });
-    const discount = Math.max(0, parseInt(document.getElementById('discountInput').value, 10) || 0);
-    const grand = Math.max(0, subtotal - discount);
+    const { discount, grand } = computeDiscountAndGrand(subtotal);
     const profit = grand - foodCostTotal;
 
     document.getElementById('totalSubtotal').textContent = rupee(subtotal);
@@ -624,17 +717,109 @@
     }
   }
 
+  document.getElementById('discountModeSeg').addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    state.discountMode = btn.dataset.mode;
+    document.querySelectorAll('#discountModeSeg button').forEach((b) => b.classList.toggle('active', b === btn));
+    document.getElementById('discountFieldWrap').hidden = state.discountMode !== 'discount';
+    document.getElementById('receivedFieldWrap').hidden = state.discountMode !== 'received';
+    renderCartAndTotals();
+  });
+  document.getElementById('receivedInput').addEventListener('input', renderCartAndTotals);
+
   function resetOrderForm() {
     state.cart = {};
     state.source = 'Offline';
     state.payment = 'Cash';
+    state.discountMode = 'discount';
+    state.editingOrderId = null;
+    state.editingOrderSnapshot = null;
     document.getElementById('custName').value = '';
     document.getElementById('custMobile').value = '';
     document.getElementById('discountInput').value = '';
+    document.getElementById('receivedInput').value = '';
+    document.getElementById('discountFieldWrap').hidden = false;
+    document.getElementById('receivedFieldWrap').hidden = true;
+    document.getElementById('discountEntryWrap').hidden = true;
+    document.querySelectorAll('#discountModeSeg button').forEach((b) => b.classList.toggle('active', b.dataset.mode === 'discount'));
     document.querySelectorAll('#sourceSeg button').forEach((b) => b.classList.toggle('active', b.dataset.value === 'Offline'));
     document.querySelectorAll('#paymentSeg button').forEach((b) => b.classList.toggle('active', b.dataset.value === 'Cash'));
     document.getElementById('orderTicketPanel').classList.remove('expanded');
+    document.getElementById('editOrderBanner').hidden = true;
+    document.getElementById('completeOrderBtn').textContent = 'Complete Order';
   }
+
+  async function openOrderDetail(orderId) {
+    const o = await dbGet('orders', orderId);
+    if (!o) { toast('Order not found'); return; }
+    document.getElementById('orderDetailTitle').textContent =
+      `${o.customerName || 'Walk-in'} · ${new Date(o.timestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`;
+    const lines = o.items.map((i) => `
+      <div class="close-row"><span>${escapeHtml(i.name)} x${i.qty}</span><span>${rupee(i.price * i.qty)}</span></div>
+    `).join('');
+    document.getElementById('orderDetailRows').innerHTML = `
+      ${lines}
+      <div class="close-row"><span>Subtotal</span><span>${rupee(o.subtotal)}</span></div>
+      <div class="close-row"><span>Discount</span><span>${rupee(o.discount)}</span></div>
+      <div class="close-row"><span>Source</span><span>${escapeHtml(o.source)}</span></div>
+      <div class="close-row"><span>Payment</span><span>${escapeHtml(o.payment)}</span></div>
+      ${o.mobile ? `<div class="close-row"><span>Mobile</span><span>${escapeHtml(o.mobile)}</span></div>` : ''}
+      <div class="close-row close-row--total"><span>Grand Total</span><span>${rupee(o.grandTotal)}</span></div>
+    `;
+    document.getElementById('orderDetailBackdrop').hidden = false;
+  }
+  document.getElementById('orderDetailClose').addEventListener('click', () => {
+    document.getElementById('orderDetailBackdrop').hidden = true;
+  });
+  document.getElementById('orderDetailBackdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'orderDetailBackdrop') document.getElementById('orderDetailBackdrop').hidden = true;
+  });
+
+  async function openOrderForEdit(orderId) {
+    const order = await dbGet('orders', orderId);
+    if (!order) { toast('Order not found'); return; }
+
+    resetOrderForm();
+    state.editingOrderId = orderId;
+    state.editingOrderSnapshot = order;
+
+    let skippedItems = 0;
+    order.items.forEach((line) => {
+      const stillExists = state.items.some((i) => i.id === line.itemId);
+      if (!stillExists) { skippedItems += 1; return; }
+      state.cart[cartKey(line.itemId, line.size || 'full')] = line.qty;
+    });
+
+    state.source = order.source;
+    state.payment = order.payment;
+    document.getElementById('custName').value = order.customerName || '';
+    document.getElementById('custMobile').value = order.mobile || '';
+    document.getElementById('discountInput').value = order.discount || '';
+    document.getElementById('discountEntryWrap').hidden = !(order.source === 'Zomato' || order.source === 'Swiggy');
+    document.querySelectorAll('#sourceSeg button').forEach((b) => b.classList.toggle('active', b.dataset.value === order.source));
+    document.querySelectorAll('#paymentSeg button').forEach((b) => b.classList.toggle('active', b.dataset.value === order.payment));
+
+    document.getElementById('editOrderBannerText').textContent =
+      `Editing ${order.customerName || 'walk-in'}'s order from ${new Date(order.timestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`;
+    document.getElementById('editOrderBanner').hidden = false;
+    document.getElementById('completeOrderBtn').textContent = 'Update Order';
+
+    setView('order');
+    renderMenuGrid();
+    renderCartAndTotals();
+
+    if (skippedItems) {
+      toast(`${skippedItems} item${skippedItems > 1 ? 's' : ''} no longer in menu — couldn't load ${skippedItems > 1 ? 'them' : 'it'}`);
+    }
+  }
+
+  document.getElementById('cancelEditOrderBtn').addEventListener('click', () => {
+    resetOrderForm();
+    renderMenuGrid();
+    renderCartAndTotals();
+    setView('dashboard');
+  });
 
   function renderOrderView() {
     renderCategoryChips();
@@ -647,6 +832,20 @@
     if (!btn) return;
     state.source = btn.dataset.value;
     document.querySelectorAll('#sourceSeg button').forEach((b) => b.classList.toggle('active', b === btn));
+
+    const isOnline = state.source === 'Zomato' || state.source === 'Swiggy';
+    document.getElementById('discountEntryWrap').hidden = !isOnline;
+    if (!isOnline) {
+      // Offline doesn't use the online-discount workflow — clear it so a stale
+      // hidden value can't silently apply to the total.
+      state.discountMode = 'discount';
+      document.getElementById('discountInput').value = '';
+      document.getElementById('receivedInput').value = '';
+      document.getElementById('discountFieldWrap').hidden = false;
+      document.getElementById('receivedFieldWrap').hidden = true;
+      document.querySelectorAll('#discountModeSeg button').forEach((b) => b.classList.toggle('active', b.dataset.mode === 'discount'));
+    }
+
     renderMenuGrid();
     renderCartAndTotals();
   });
@@ -677,12 +876,39 @@
       const unitFoodCost = itemUnitCost(item, size);
       subtotal += price * qty;
       foodCostTotal += unitFoodCost * qty;
-      const label = size === 'half' ? `${item.name} (Half)` : item.name;
+      const portion = findPortion(item, size); const label = portion.label === 'Full' ? item.name : `${item.name} (${portion.label})`;
       return { itemId, size, name: label, qty, price, unitFoodCost };
     });
-    const discount = Math.max(0, parseInt(document.getElementById('discountInput').value, 10) || 0);
-    const grandTotal = Math.max(0, subtotal - discount);
+    const { discount, grand: grandTotal } = computeDiscountAndGrand(subtotal);
     const profit = grandTotal - foodCostTotal;
+
+    const isEdit = !!state.editingOrderId;
+
+    if (isEdit) {
+      // Undo the original order's inventory deduction before applying the new one,
+      // so editing quantities up or down keeps Stock Left correct either way.
+      await reverseInventoryForOrder(state.editingOrderSnapshot.items);
+
+      const updatedOrder = {
+        ...state.editingOrderSnapshot, // keeps id, original dateKey/timestamp, udharCleared state, etc.
+        customerName: document.getElementById('custName').value.trim(),
+        mobile: document.getElementById('custMobile').value.trim(),
+        source: state.source,
+        payment: state.payment,
+        items: orderItems,
+        subtotal, discount, grandTotal, foodCostTotal, profit,
+      };
+      await dbPut('orders', updatedOrder);
+      await deductInventoryForOrder(orderItems);
+      // Footfall was already counted when this order was first placed — don't recount it.
+
+      toast(`Order updated · ${rupee(grandTotal)}`);
+      resetOrderForm();
+      renderMenuGrid();
+      renderCartAndTotals();
+      setView('dashboard');
+      return;
+    }
 
     const order = {
       id: uid(),
@@ -739,15 +965,23 @@
       list.innerHTML = '<div class="empty-hint">No items yet. Tap "+ Item" to add one.</div>';
       return;
     }
-    list.innerHTML = items.map((item) => `
+    list.innerHTML = items.map((item) => {
+      const portions = getItemPortions(item);
+      const extra = portions.filter((p) => p.id !== 'full');
+      const sub = portions.map((p) => {
+        const cost = state.source === 'Offline' ? p.foodCost : p.foodCost + item.packagingCost;
+        return `${escapeHtml(p.label)}: Offline ${rupee(p.offlinePrice)} · Online ${rupee(p.onlinePrice)} (cost ${rupee(p.foodCost)})`;
+      }).join('<br/>');
+      return `
       <div class="item-row ${item.available ? '' : 'item-row__unavailable'}">
         <div>
-          <div class="item-row__name">${escapeHtml(item.name)}${item.hasHalf ? ' <span class="tag">Half/Full</span>' : ''}</div>
-          <div class="item-row__sub">Full: Offline ${rupee(item.offlinePrice)} (cost ${rupee(item.foodCost)}) · Online ${rupee(item.onlinePrice)} (cost ${rupee(item.foodCost + item.packagingCost)})${item.hasHalf ? `<br/>Half: Offline ${rupee(item.halfOfflinePrice)} (cost ${rupee(item.halfFoodCost)}) · Online ${rupee(item.halfOnlinePrice)} (cost ${rupee(item.halfFoodCost + item.halfPackagingCost)})` : ''}</div>
+          <div class="item-row__name">${escapeHtml(item.name)}${extra.length ? ` <span class="tag">${extra.length + 1} portions</span>` : ''}</div>
+          <div class="item-row__sub">${sub}</div>
         </div>
         <button class="item-row__edit" data-id="${item.id}">Edit</button>
       </div>
-    `).join('');
+    `;
+    }).join('');
     list.querySelectorAll('.item-row__edit').forEach((btn) => {
       btn.addEventListener('click', () => { openItemModal(btn.dataset.id); });
     });
@@ -757,6 +991,60 @@
     const sel = document.getElementById('fItemCategory');
     sel.innerHTML = state.categories.map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
   }
+
+  function renderPortionsList() {
+    const wrap = document.getElementById('portionsList');
+    wrap.innerHTML = state.portionsDraft.map((p, idx) => `
+      <div class="size-block" data-idx="${idx}">
+        <div class="field-row">
+          <div>
+            <label>Portion Name</label>
+            <input type="text" data-field="label" value="${escapeHtml(p.label || '')}" placeholder="e.g. Half, Quarter, Piece" />
+          </div>
+        </div>
+        <div class="field-row">
+          <div>
+            <label>Offline Price ₹</label>
+            <input type="number" min="0" data-field="offlinePrice" value="${p.offlinePrice || ''}" />
+          </div>
+          <div>
+            <label>Online Price ₹</label>
+            <input type="number" min="0" data-field="onlinePrice" value="${p.onlinePrice || ''}" />
+          </div>
+        </div>
+        <div class="field-row">
+          <div>
+            <label>Food Cost ₹</label>
+            <input type="number" min="0" data-field="foodCost" value="${p.foodCost || ''}" />
+          </div>
+          <div>
+            <label>Recipe Factor <span class="field-hint">(1 = full recipe, 0.5 = half, etc.)</span></label>
+            <input type="number" min="0" step="0.1" data-field="recipeFactor" value="${p.recipeFactor != null ? p.recipeFactor : 1}" />
+          </div>
+        </div>
+        <button type="button" class="btn btn--ghost btn--small portion-remove" data-idx="${idx}">Remove Portion</button>
+      </div>
+    `).join('');
+
+    wrap.querySelectorAll('input[data-field]').forEach((inp) => {
+      inp.addEventListener('input', (e) => {
+        const idx = parseInt(e.target.closest('.size-block').dataset.idx, 10);
+        const field = e.target.dataset.field;
+        state.portionsDraft[idx][field] = field === 'label' ? e.target.value : (parseFloat(e.target.value) || 0);
+      });
+    });
+    wrap.querySelectorAll('.portion-remove').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.portionsDraft.splice(parseInt(btn.dataset.idx, 10), 1);
+        renderPortionsList();
+      });
+    });
+  }
+
+  document.getElementById('addPortionBtn').addEventListener('click', () => {
+    state.portionsDraft.push({ label: '', offlinePrice: 0, onlinePrice: 0, foodCost: 0, recipeFactor: 1 });
+    renderPortionsList();
+  });
 
   async function openItemModal(itemId) {
     state.editingItemId = itemId || null;
@@ -771,52 +1059,42 @@
       title.textContent = 'Edit Item';
       document.getElementById('fItemName').value = item.name;
       document.getElementById('fItemCategory').value = item.categoryId;
-      document.getElementById('fHasHalf').checked = !!item.hasHalf;
       document.getElementById('fOfflinePrice').value = item.offlinePrice;
       document.getElementById('fOnlinePrice').value = item.onlinePrice;
       document.getElementById('fFoodCost').value = item.foodCost;
       document.getElementById('fPackagingCost').value = item.packagingCost;
       document.getElementById('fPackOffline').checked = item.chargePackagingOffline === true;
       document.getElementById('fPackOnline').checked = item.chargePackagingOnline !== false;
-      document.getElementById('fHalfOfflinePrice').value = item.halfOfflinePrice || '';
-      document.getElementById('fHalfOnlinePrice').value = item.halfOnlinePrice || '';
-      document.getElementById('fHalfFoodCost').value = item.halfFoodCost || '';
-      document.getElementById('fHalfPackagingCost').value = item.halfPackagingCost || '';
       document.getElementById('fAvailable').checked = item.available;
       deleteBtn.hidden = false;
       state.recipeDraft = (item.recipe || []).map((r) => ({ ...r }));
+      const portions = getItemPortions(item);
+      state.portionsDraft = portions.filter((p) => p.id !== 'full').map((p) => ({ ...p }));
     } else {
       title.textContent = 'New Item';
       document.getElementById('fItemName').value = '';
       if (state.categories.length) document.getElementById('fItemCategory').value = state.categories[0].id;
-      document.getElementById('fHasHalf').checked = false;
       document.getElementById('fOfflinePrice').value = '';
       document.getElementById('fOnlinePrice').value = '';
       document.getElementById('fFoodCost').value = '';
       document.getElementById('fPackagingCost').value = '';
       document.getElementById('fPackOffline').checked = false;
       document.getElementById('fPackOnline').checked = true;
-      document.getElementById('fHalfOfflinePrice').value = '';
-      document.getElementById('fHalfOnlinePrice').value = '';
-      document.getElementById('fHalfFoodCost').value = '';
-      document.getElementById('fHalfPackagingCost').value = '';
       document.getElementById('fAvailable').checked = true;
       deleteBtn.hidden = true;
       state.recipeDraft = [];
+      state.portionsDraft = [];
     }
-    document.getElementById('halfSizeBlock').hidden = !document.getElementById('fHasHalf').checked;
+    renderPortionsList();
     renderRecipeRows();
     backdrop.hidden = false;
   }
-
-  document.getElementById('fHasHalf').addEventListener('change', (e) => {
-    document.getElementById('halfSizeBlock').hidden = !e.target.checked;
-  });
 
   function closeItemModal() {
     document.getElementById('itemModalBackdrop').hidden = true;
     state.editingItemId = null;
     state.recipeDraft = [];
+    state.portionsDraft = [];
   }
 
   function computeRecipeCost() {
@@ -893,21 +1171,34 @@
   document.getElementById('fSaveBtn').addEventListener('click', async () => {
     const name = document.getElementById('fItemName').value.trim();
     if (!name) { toast('Item name is required'); return; }
+    const fullPortion = {
+      id: 'full', label: 'Full',
+      offlinePrice: parseFloat(document.getElementById('fOfflinePrice').value) || 0,
+      onlinePrice: parseFloat(document.getElementById('fOnlinePrice').value) || 0,
+      foodCost: parseFloat(document.getElementById('fFoodCost').value) || 0,
+      recipeFactor: 1,
+    };
+    const extraPortions = state.portionsDraft
+      .filter((p) => p.label && p.label.trim())
+      .map((p) => ({
+        id: p.id || uid(),
+        label: p.label.trim(),
+        offlinePrice: p.offlinePrice || 0,
+        onlinePrice: p.onlinePrice || 0,
+        foodCost: p.foodCost || 0,
+        recipeFactor: p.recipeFactor != null ? p.recipeFactor : 1,
+      }));
     const record = {
       id: state.editingItemId || uid(),
       name,
       categoryId: document.getElementById('fItemCategory').value,
-      hasHalf: document.getElementById('fHasHalf').checked,
-      offlinePrice: parseFloat(document.getElementById('fOfflinePrice').value) || 0,
-      onlinePrice: parseFloat(document.getElementById('fOnlinePrice').value) || 0,
-      foodCost: parseFloat(document.getElementById('fFoodCost').value) || 0,
+      offlinePrice: fullPortion.offlinePrice,
+      onlinePrice: fullPortion.onlinePrice,
+      foodCost: fullPortion.foodCost,
       packagingCost: parseFloat(document.getElementById('fPackagingCost').value) || 0,
       chargePackagingOffline: document.getElementById('fPackOffline').checked,
       chargePackagingOnline: document.getElementById('fPackOnline').checked,
-      halfOfflinePrice: parseFloat(document.getElementById('fHalfOfflinePrice').value) || 0,
-      halfOnlinePrice: parseFloat(document.getElementById('fHalfOnlinePrice').value) || 0,
-      halfFoodCost: parseFloat(document.getElementById('fHalfFoodCost').value) || 0,
-      halfPackagingCost: parseFloat(document.getElementById('fHalfPackagingCost').value) || 0,
+      portions: [fullPortion, ...extraPortions],
       available: document.getElementById('fAvailable').checked,
       recipe: state.recipeDraft.filter((r) => r.inventoryId && r.qty > 0),
     };
@@ -963,9 +1254,10 @@
   }
 
   function printItemRow(item, mode) {
-    const priceText = item.hasHalf
-      ? `Half ${priceLine(item.halfOfflinePrice, item.halfOnlinePrice, mode)} · Full ${priceLine(item.offlinePrice, item.onlinePrice, mode)}`
-      : priceLine(item.offlinePrice, item.onlinePrice, mode);
+    const portions = getItemPortions(item);
+    const priceText = portions.length > 1
+      ? portions.map((p) => `${escapeHtml(p.label)} ${priceLine(p.offlinePrice, p.onlinePrice, mode)}`).join(' · ')
+      : priceLine(portions[0].offlinePrice, portions[0].onlinePrice, mode);
     return `
       <div class="print-menu__item ${mode === 'both' ? 'print-menu__item--both' : ''}">
         <span class="print-menu__item-name">${escapeHtml(item.name)}</span>
@@ -1088,12 +1380,11 @@
         y += 8;
 
         items.forEach((item) => {
-          const lines = item.hasHalf
-            ? [`${item.name} (Half)`, `${item.name} (Full)`]
+          const portions = getItemPortions(item);
+          const lines = portions.length > 1
+            ? portions.map((p) => `${item.name} (${p.label})`)
             : [item.name];
-          const prices = item.hasHalf
-            ? [priceLinePdf(item.halfOfflinePrice, item.halfOnlinePrice, mode), priceLinePdf(item.offlinePrice, item.onlinePrice, mode)]
-            : [priceLinePdf(item.offlinePrice, item.onlinePrice, mode)];
+          const prices = portions.map((p) => priceLinePdf(p.offlinePrice, p.onlinePrice, mode));
 
           lines.forEach((lineName, idx) => {
             ensureSpace(7);
@@ -1476,6 +1767,7 @@
             <span class="order-row__meta">${p.supplier ? escapeHtml(p.supplier) : 'No supplier'} · ${p.dateKey} · ${p.payment}</span>
           </div>
           <div class="order-row__amount">${rupee(p.amount)}</div>
+          <button class="order-row__edit-order" data-id="${p.id}">Edit</button>
           <button class="order-row__delete" data-id="${p.id}" aria-label="Delete purchase">&times;</button>
         </div>
       `).join('');
@@ -1502,9 +1794,48 @@
           }
         });
       });
+      list.querySelectorAll('.order-row__edit-order').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const p = all.find((x) => x.id === btn.dataset.id);
+          if (!p) return;
+          state.editingPurchaseId = p.id;
+          document.getElementById('pDate').value = p.dateKey;
+          document.getElementById('pDateReadout').textContent = formatDateReadable(p.dateKey);
+          document.getElementById('pSupplier').value = p.supplier || '';
+          document.getElementById('pItemInput').value = p.itemName;
+          document.getElementById('pItemUnit').value = p.unit || '';
+          document.getElementById('pQty').value = p.qty;
+          document.getElementById('pRate').value = p.rate;
+          document.getElementById('pAmount').value = p.amount;
+          document.getElementById('pPayment').value = p.payment;
+          document.getElementById('pNotes').value = p.notes || '';
+          updatePurchaseItemMatch();
+          document.getElementById('savePurchaseBtn').textContent = 'Update Purchase';
+          document.getElementById('cancelEditPurchaseBtn').hidden = false;
+        });
+      });
     }
     await renderPurchaseSummary();
   }
+
+  function resetPurchaseForm() {
+    state.editingPurchaseId = null;
+    document.getElementById('pSupplier').value = '';
+    document.getElementById('pQty').value = '';
+    document.getElementById('pRate').value = '';
+    document.getElementById('pAmount').value = '';
+    document.getElementById('pNotes').value = '';
+    document.getElementById('pItemInput').value = '';
+    document.getElementById('pItemUnit').value = '';
+    document.getElementById('pItemMatchHint').textContent = '';
+    document.getElementById('pEditItemBtn').hidden = true;
+    document.getElementById('pDate').value = todayKey();
+    document.getElementById('pDateReadout').textContent = formatDateReadable(todayKey());
+    document.getElementById('savePurchaseBtn').textContent = 'Save Purchase';
+    document.getElementById('cancelEditPurchaseBtn').hidden = true;
+    populatePurchaseItemSelect();
+  }
+  document.getElementById('cancelEditPurchaseBtn').addEventListener('click', resetPurchaseForm);
 
   document.getElementById('savePurchaseBtn').addEventListener('click', async () => {
     const typedName = document.getElementById('pItemInput').value.trim();
@@ -1513,6 +1844,10 @@
     const amount = parseFloat(document.getElementById('pAmount').value) || qty * rate;
     if (!typedName) { toast('Enter or pick an item'); return; }
     if (!qty) { toast('Enter a quantity'); return; }
+
+    const isEdit = !!state.editingPurchaseId;
+    let oldPurchase = null;
+    if (isEdit) oldPurchase = await dbGet('purchases', state.editingPurchaseId);
 
     let inv = findInventoryByName(typedName);
     if (!inv) {
@@ -1529,10 +1864,19 @@
       await dbPut('inventory', inv);
     }
 
+    // If editing and switching item, first undo the old stock effect on the old item.
+    if (isEdit && oldPurchase && oldPurchase.inventoryId !== inv.id) {
+      const oldInv = await dbGet('inventory', oldPurchase.inventoryId);
+      if (oldInv) {
+        oldInv.currentStock = Math.max(0, (oldInv.currentStock || 0) - oldPurchase.qty);
+        await dbPut('inventory', oldInv);
+      }
+    }
+
     const purchase = {
-      id: uid(),
+      id: state.editingPurchaseId || uid(),
       dateKey: document.getElementById('pDate').value || todayKey(),
-      timestamp: Date.now(),
+      timestamp: isEdit ? oldPurchase.timestamp : Date.now(),
       supplier: document.getElementById('pSupplier').value.trim(),
       inventoryId: inv.id,
       itemName: inv.name,
@@ -1543,22 +1887,17 @@
     };
     await dbPut('purchases', purchase);
 
-    // auto-update inventory: increment stock, update latest purchase cost
-    inv.currentStock = (inv.currentStock || 0) + qty;
+    // Same item as before: replace the old quantity's stock effect with the new one.
+    // Different item: the old item was already corrected above, so just add the new qty here.
+    const qtyDelta = (isEdit && oldPurchase && oldPurchase.inventoryId === inv.id) ? (qty - oldPurchase.qty) : qty;
+    inv.currentStock = Math.max(0, (inv.currentStock || 0) + qtyDelta);
     if (rate) inv.purchaseCost = rate;
     await dbPut('inventory', inv);
     await refreshInventory();
 
-    document.getElementById('pSupplier').value = '';
-    document.getElementById('pQty').value = '';
-    document.getElementById('pRate').value = '';
-    document.getElementById('pAmount').value = '';
-    document.getElementById('pNotes').value = '';
-    document.getElementById('pItemInput').value = '';
-    document.getElementById('pItemUnit').value = '';
-    document.getElementById('pItemMatchHint').textContent = '';
-    document.getElementById('pEditItemBtn').hidden = true;
-    populatePurchaseItemSelect();
+    resetPurchaseForm();
+    renderPurchaseList();
+    toast(isEdit ? 'Purchase updated · stock adjusted' : 'Purchase saved · inventory updated');
     renderPurchaseList();
     toast(`Saved · ${inv.name} stock left: ${inv.currentStock} ${inv.unit}`);
   });
@@ -1594,6 +1933,7 @@
           <span class="order-row__meta">${ex.dateKey}${ex.notes ? ' · ' + escapeHtml(ex.notes) : ''}</span>
         </div>
         <div class="order-row__amount">${rupee(ex.amount)}</div>
+        <button class="order-row__edit-order" data-id="${ex.id}">Edit</button>
         <button class="order-row__delete" data-id="${ex.id}" aria-label="Delete expense">&times;</button>
       </div>
     `).join('');
@@ -1610,7 +1950,44 @@
         }
       });
     });
+    list.querySelectorAll('.order-row__edit-order').forEach((btn) => {
+      btn.addEventListener('click', () => loadExpenseIntoForm(all.find((e) => e.id === btn.dataset.id)));
+    });
   }
+
+  function loadExpenseIntoForm(ex) {
+    if (!ex) return;
+    state.editingExpenseId = ex.id;
+    document.getElementById('eDate').value = ex.dateKey;
+    document.getElementById('eDateReadout').textContent = formatDateReadable(ex.dateKey);
+    const presetCats = ['Raw Material', 'Gas', 'Electricity', 'Packaging', 'Cleaning', 'Repairs', 'Advertising', 'Miscellaneous'];
+    if (presetCats.includes(ex.category)) {
+      document.getElementById('eCategory').value = ex.category;
+      document.getElementById('eCategoryOther').hidden = true;
+    } else {
+      document.getElementById('eCategory').value = '__other';
+      document.getElementById('eCategoryOther').hidden = false;
+      document.getElementById('eCategoryOther').value = ex.category;
+    }
+    document.getElementById('eAmount').value = ex.amount;
+    document.getElementById('eNotes').value = ex.notes || '';
+    document.getElementById('saveExpenseBtn').textContent = 'Update Expense';
+    document.getElementById('cancelEditExpenseBtn').hidden = false;
+  }
+
+  function resetExpenseForm() {
+    state.editingExpenseId = null;
+    document.getElementById('eAmount').value = '';
+    document.getElementById('eNotes').value = '';
+    document.getElementById('eCategoryOther').value = '';
+    document.getElementById('eCategoryOther').hidden = true;
+    document.getElementById('eCategory').value = 'Raw Material';
+    document.getElementById('eDate').value = todayKey();
+    document.getElementById('eDateReadout').textContent = formatDateReadable(todayKey());
+    document.getElementById('saveExpenseBtn').textContent = 'Save Expense';
+    document.getElementById('cancelEditExpenseBtn').hidden = true;
+  }
+  document.getElementById('cancelEditExpenseBtn').addEventListener('click', resetExpenseForm);
 
   document.getElementById('eCategory').addEventListener('change', (e) => {
     document.getElementById('eCategoryOther').hidden = e.target.value !== '__other';
@@ -1624,21 +2001,18 @@
       ? (document.getElementById('eCategoryOther').value.trim() || 'Other')
       : catSel;
     const expense = {
-      id: uid(),
+      id: state.editingExpenseId || uid(),
       dateKey: document.getElementById('eDate').value || todayKey(),
-      timestamp: Date.now(),
+      timestamp: state.editingExpenseId ? (await dbGet('expenses', state.editingExpenseId)).timestamp : Date.now(),
       category,
       amount,
       notes: document.getElementById('eNotes').value.trim(),
     };
+    const wasEditing = !!state.editingExpenseId;
     await dbPut('expenses', expense);
-    document.getElementById('eAmount').value = '';
-    document.getElementById('eNotes').value = '';
-    document.getElementById('eCategoryOther').value = '';
-    document.getElementById('eCategoryOther').hidden = true;
-    document.getElementById('eCategory').value = 'Raw Material';
+    resetExpenseForm();
     renderExpenseList();
-    toast('Expense saved · added to this month\'s total');
+    toast(wasEditing ? 'Expense updated' : 'Expense saved · added to this month\'s total');
   });
 
   /* ----- Customers + Udhar ----- */
@@ -1720,7 +2094,8 @@
       : '<div class="order-log__empty">Nothing pending — fully cleared.</div>';
     pendingEl.querySelectorAll('.order-row__clear').forEach((btn) => {
       btn.addEventListener('click', async () => {
-        await markUdharCleared(btn.dataset.store, btn.dataset.id);
+        const dateInput = pendingEl.querySelector(`[data-clear-date-for="${btn.dataset.id}"]`);
+        await markUdharCleared(btn.dataset.store, btn.dataset.id, dateInput ? dateInput.value : null);
         openCustomerModal(key);
         renderUdharTab();
       });
@@ -1862,42 +2237,224 @@
   }
 
   async function renderReports() {
-    const monthInput = document.getElementById('rMonth');
-    if (!monthInput.value) monthInput.value = todayKey().slice(0, 7);
-    await computeReportForMonth(monthInput.value);
+    state.reportPeriod = state.reportPeriod || 'month';
+    document.getElementById('rPeriodMonth').value = document.getElementById('rPeriodMonth').value || todayKey().slice(0, 7);
+    document.getElementById('rPeriodDay').value = document.getElementById('rPeriodDay').value || todayKey();
+    document.getElementById('rPeriodYear').value = document.getElementById('rPeriodYear').value || todayKey().slice(0, 4);
+    document.getElementById('rPeriodDayReadout').textContent = formatDateReadable(document.getElementById('rPeriodDay').value);
+    await computePeriodReport();
     await renderComparisons();
     renderSalesTrendChart();
+    await renderBusinessInsights();
   }
 
-  document.getElementById('rMonth').addEventListener('change', () => {
-    computeReportForMonth(document.getElementById('rMonth').value);
-  });
+  function daysBetween(dateKeyA, dateKeyB) {
+    return Math.round((new Date(dateKeyB) - new Date(dateKeyA)) / 86400000);
+  }
 
-  async function computeReportForMonth(monthKey) {
+  async function renderBusinessInsights() {
+    await refreshCategoriesAndItems();
+    await refreshInventory();
+    await loadAllOrdersAndPayments();
+    const allExpenses = await dbGetAll('expenses');
+    const orders = state.allOrders || [];
+    const today = todayKey();
+
+    // ---- 1. Repeat customers gone quiet: >=2 past orders, none in the last 14 days ----
+    const custMap = new Map();
+    orders.forEach((o) => {
+      const key = customerKeyOf(o);
+      if (!key) return;
+      if (!custMap.has(key)) custMap.set(key, { name: o.customerName || o.mobile, count: 0, lastDate: o.dateKey });
+      const c = custMap.get(key);
+      c.count += 1;
+      if (o.dateKey > c.lastDate) c.lastDate = o.dateKey;
+      if (o.customerName) c.name = o.customerName;
+    });
+    const quiet = Array.from(custMap.values())
+      .filter((c) => c.count >= 2 && daysBetween(c.lastDate, today) >= 14)
+      .map((c) => ({ ...c, daysAgo: daysBetween(c.lastDate, today) }))
+      .sort((a, b) => b.daysAgo - a.daysAgo)
+      .slice(0, 10);
+    document.getElementById('insightRepeatCustomers').innerHTML = quiet.length
+      ? quiet.map((c) => `<div class="close-row"><span>${escapeHtml(c.name)} (${c.count} past orders)</span><span>${c.daysAgo} days ago</span></div>`).join('')
+      : '<div class="close-row"><span>No regulars have gone quiet — good sign.</span><span></span></div>';
+
+    // ---- 2. Running low soon: estimate days of stock left from last 7 days' recipe usage ----
+    const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
+    const weekAgoKey = weekAgo.toISOString().slice(0, 10);
+    const usage = {}; // inventoryId -> qty used in last 7 days (purchase units)
+    orders.filter((o) => o.dateKey >= weekAgoKey).forEach((o) => {
+      o.items.forEach((line) => {
+        const item = state.items.find((i) => i.id === line.itemId);
+        if (!item || !item.recipe || !item.recipe.length) return;
+        const factor = findPortion(item, line.size).recipeFactor || 1;
+        item.recipe.forEach((ing) => {
+          const inv = state.inventory.find((i) => i.id === ing.inventoryId);
+          if (!inv) return;
+          const perPurchase = inv.unitsPerPurchase || 1;
+          const used = (ing.qty * line.qty * factor) / perPurchase;
+          usage[ing.inventoryId] = (usage[ing.inventoryId] || 0) + used;
+        });
+      });
+    });
+    const lowSoon = state.inventory
+      .map((inv) => {
+        const weeklyUsed = usage[inv.id] || 0;
+        const dailyUsed = weeklyUsed / 7;
+        const daysLeft = dailyUsed > 0 ? (inv.currentStock || 0) / dailyUsed : null;
+        return { name: inv.name, unit: inv.unit, stock: inv.currentStock || 0, daysLeft };
+      })
+      .filter((i) => i.daysLeft !== null && i.daysLeft <= 3)
+      .sort((a, b) => a.daysLeft - b.daysLeft)
+      .slice(0, 10);
+    document.getElementById('insightLowStock').innerHTML = lowSoon.length
+      ? lowSoon.map((i) => `<div class="close-row"><span>${escapeHtml(i.name)} — ${i.stock} ${escapeHtml(i.unit || '')} left</span><span>~${i.daysLeft.toFixed(1)} days left</span></div>`).join('')
+      : '<div class="close-row"><span>Nothing projected to run out in the next 3 days.</span><span></span></div>';
+
+    // ---- 3. Profit margin by item, last 30 days ----
+    const monthAgo = new Date(); monthAgo.setDate(monthAgo.getDate() - 30);
+    const monthAgoKey = monthAgo.toISOString().slice(0, 10);
+    const marginAgg = {};
+    orders.filter((o) => o.dateKey >= monthAgoKey).forEach((o) => o.items.forEach((line) => {
+      if (!marginAgg[line.name]) marginAgg[line.name] = { name: line.name, revenue: 0, cost: 0 };
+      marginAgg[line.name].revenue += line.price * line.qty;
+      marginAgg[line.name].cost += line.unitFoodCost * line.qty;
+    }));
+    const margins = Object.values(marginAgg)
+      .filter((m) => m.revenue > 0)
+      .map((m) => ({ ...m, marginPct: ((m.revenue - m.cost) / m.revenue) * 100 }))
+      .sort((a, b) => b.marginPct - a.marginPct);
+    document.getElementById('insightMargins').innerHTML = margins.length
+      ? margins.map((m) => `<div class="close-row"><span>${escapeHtml(m.name)}</span><span>${m.marginPct.toFixed(0)}% margin · ${rupee(m.revenue - m.cost)} profit</span></div>`).join('')
+      : '<div class="close-row"><span>No sales in the last 30 days yet.</span><span></span></div>';
+
+    // ---- 4. Best/worst day of week, all orders on record ----
+    const dayTotals = {}; // dateKey -> sales
+    orders.forEach((o) => { dayTotals[o.dateKey] = (dayTotals[o.dateKey] || 0) + o.grandTotal; });
+    const weekdayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const weekdayAgg = weekdayNames.map(() => ({ total: 0, days: 0 }));
+    Object.entries(dayTotals).forEach(([dateKey, sales]) => {
+      const wd = new Date(dateKey).getDay();
+      weekdayAgg[wd].total += sales;
+      weekdayAgg[wd].days += 1;
+    });
+    const weekdayRows = weekdayNames
+      .map((name, i) => ({ name, avg: weekdayAgg[i].days ? weekdayAgg[i].total / weekdayAgg[i].days : 0, days: weekdayAgg[i].days }))
+      .filter((w) => w.days > 0)
+      .sort((a, b) => b.avg - a.avg);
+    document.getElementById('insightWeekday').innerHTML = weekdayRows.length
+      ? weekdayRows.map((w) => `<div class="close-row"><span>${w.name}</span><span>${rupee(w.avg)} avg (${w.days} day${w.days !== 1 ? 's' : ''} on record)</span></div>`).join('')
+      : '<div class="close-row"><span>Not enough closed days yet to see a pattern.</span><span></span></div>';
+
+    // ---- 5. Expense category alerts: this month vs last month, flag >20% jumps ----
+    const thisMonthKey = today.slice(0, 7);
+    const lastMonthDate = new Date(); lastMonthDate.setMonth(lastMonthDate.getMonth() - 1);
+    const lastMonthKey = lastMonthDate.toISOString().slice(0, 7);
+    const thisMonthByCat = {}, lastMonthByCat = {};
+    allExpenses.forEach((e) => {
+      if (e.dateKey.startsWith(thisMonthKey)) thisMonthByCat[e.category] = (thisMonthByCat[e.category] || 0) + e.amount;
+      if (e.dateKey.startsWith(lastMonthKey)) lastMonthByCat[e.category] = (lastMonthByCat[e.category] || 0) + e.amount;
+    });
+    const expenseAlerts = Object.entries(thisMonthByCat)
+      .map(([cat, amt]) => {
+        const prev = lastMonthByCat[cat] || 0;
+        const pctChange = prev > 0 ? ((amt - prev) / prev) * 100 : (amt > 0 ? 100 : 0);
+        return { cat, amt, prev, pctChange };
+      })
+      .filter((e) => e.pctChange >= 20 && e.amt >= 100)
+      .sort((a, b) => b.pctChange - a.pctChange);
+    document.getElementById('insightExpenses').innerHTML = expenseAlerts.length
+      ? expenseAlerts.map((e) => `<div class="close-row"><span>${escapeHtml(e.cat)}</span><span>${rupee(e.amt)} this month, up ${e.pctChange.toFixed(0)}% from ${rupee(e.prev)}</span></div>`).join('')
+      : '<div class="close-row"><span>No expense category has jumped noticeably this month.</span><span></span></div>';
+  }
+
+  document.getElementById('reportPeriodSeg').addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    state.reportPeriod = btn.dataset.period;
+    document.querySelectorAll('#reportPeriodSeg button').forEach((b) => b.classList.toggle('active', b === btn));
+    document.getElementById('rPeriodDayWrap').hidden = state.reportPeriod !== 'day';
+    document.getElementById('rPeriodWeekWrap').hidden = state.reportPeriod !== 'week';
+    document.getElementById('rPeriodMonthWrap').hidden = state.reportPeriod !== 'month';
+    document.getElementById('rPeriodYearWrap').hidden = state.reportPeriod !== 'year';
+    computePeriodReport();
+  });
+  document.getElementById('rPeriodDay').addEventListener('change', () => {
+    document.getElementById('rPeriodDayReadout').textContent = formatDateReadable(document.getElementById('rPeriodDay').value);
+    computePeriodReport();
+  });
+  document.getElementById('rPeriodWeek').addEventListener('change', computePeriodReport);
+  document.getElementById('rPeriodMonth').addEventListener('change', computePeriodReport);
+  document.getElementById('rPeriodYear').addEventListener('change', computePeriodReport);
+
+  // ISO week input (e.g. "2026-W34") -> Monday..Sunday date-key range for that week.
+  function isoWeekToRange(weekStr) {
+    const [yearStr, wStr] = weekStr.split('-W');
+    const year = parseInt(yearStr, 10);
+    const week = parseInt(wStr, 10);
+    const simple = new Date(Date.UTC(year, 0, 1 + (week - 1) * 7));
+    const dayOfWeek = simple.getUTCDay() || 7;
+    const monday = new Date(simple);
+    monday.setUTCDate(simple.getUTCDate() - dayOfWeek + 1);
+    const sunday = new Date(monday);
+    sunday.setUTCDate(monday.getUTCDate() + 6);
+    const fmt = (d) => d.toISOString().slice(0, 10);
+    return { startKey: fmt(monday), endKey: fmt(sunday) };
+  }
+
+  async function computePeriodReport() {
     await refreshCategoriesAndItems();
     await loadAllOrdersAndPayments();
     const allExpenses = await dbGetAll('expenses');
 
-    const orders = state.allOrders.filter((o) => o.dateKey.startsWith(monthKey));
-    const expenses = allExpenses.filter((e) => e.dateKey.startsWith(monthKey));
+    const period = state.reportPeriod || 'month';
+    let orderFilter, expenseFilter, label;
+
+    if (period === 'day') {
+      const dayKey = document.getElementById('rPeriodDay').value || todayKey();
+      orderFilter = (o) => o.dateKey === dayKey;
+      expenseFilter = (e) => e.dateKey === dayKey;
+      label = formatDateReadable(dayKey);
+    } else if (period === 'week') {
+      const weekVal = document.getElementById('rPeriodWeek').value;
+      if (!weekVal) { label = 'Pick a week'; orderFilter = () => false; expenseFilter = () => false; }
+      else {
+        const { startKey, endKey } = isoWeekToRange(weekVal);
+        orderFilter = (o) => o.dateKey >= startKey && o.dateKey <= endKey;
+        expenseFilter = (e) => e.dateKey >= startKey && e.dateKey <= endKey;
+        label = `${formatDateReadable(startKey)} – ${formatDateReadable(endKey)}`;
+      }
+    } else if (period === 'year') {
+      const yearVal = document.getElementById('rPeriodYear').value || todayKey().slice(0, 4);
+      orderFilter = (o) => o.dateKey.startsWith(yearVal);
+      expenseFilter = (e) => e.dateKey.startsWith(yearVal);
+      label = yearVal;
+    } else {
+      const monthKey = document.getElementById('rPeriodMonth').value || todayKey().slice(0, 7);
+      orderFilter = (o) => o.dateKey.startsWith(monthKey);
+      expenseFilter = (e) => e.dateKey.startsWith(monthKey);
+      const [y, m] = monthKey.split('-');
+      label = new Date(Number(y), Number(m) - 1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+    }
+
+    const orders = state.allOrders.filter(orderFilter);
+    const expenses = allExpenses.filter(expenseFilter);
 
     const sales = orders.reduce((s, o) => s + o.grandTotal, 0);
     const rawProfit = orders.reduce((s, o) => s + o.profit, 0);
     const expTotal = expenses.reduce((s, e) => s + e.amount, 0);
     const profit = rawProfit - expTotal;
 
-    const [y, m] = monthKey.split('-');
-    document.getElementById('rMonthLabel').textContent = new Date(Number(y), Number(m) - 1, 1)
-      .toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+    document.getElementById('rMonthLabel').textContent = label;
     document.getElementById('rSales').textContent = rupee(sales);
     document.getElementById('rOrders').textContent = orders.length;
     document.getElementById('rProfit').textContent = rupee(profit);
     document.getElementById('rExpenses').textContent = rupee(expTotal);
 
-    // Top selling items
     const itemAgg = {};
     orders.forEach((o) => o.items.forEach((line) => {
-      const key = line.itemId + (line.size === 'half' ? '::half' : '');
+      const key = line.itemId + '::' + line.size;
       if (!itemAgg[key]) itemAgg[key] = { name: line.name, qty: 0, revenue: 0, itemId: line.itemId };
       itemAgg[key].qty += line.qty;
       itemAgg[key].revenue += line.price * line.qty;
@@ -1905,9 +2462,8 @@
     const topItems = Object.values(itemAgg).sort((a, b) => b.revenue - a.revenue).slice(0, 10);
     document.getElementById('rTopItems').innerHTML = topItems.length
       ? topItems.map((i) => `<div class="close-row"><span>${escapeHtml(i.name)} (${i.qty} sold)</span><span>${rupee(i.revenue)}</span></div>`).join('')
-      : '<div class="close-row"><span>No sales this month</span><span></span></div>';
+      : '<div class="close-row"><span>No sales in this period</span><span></span></div>';
 
-    // Sales by category
     const catAgg = {};
     orders.forEach((o) => o.items.forEach((line) => {
       const item = state.items.find((i) => i.id === line.itemId);
@@ -1918,9 +2474,8 @@
     const catRows = Object.entries(catAgg).sort((a, b) => b[1] - a[1]);
     document.getElementById('rCategoryBreakdown').innerHTML = catRows.length
       ? catRows.map(([name, amt]) => `<div class="close-row"><span>${escapeHtml(name)}</span><span>${rupee(amt)}</span></div>`).join('')
-      : '<div class="close-row"><span>No sales this month</span><span></span></div>';
+      : '<div class="close-row"><span>No sales in this period</span><span></span></div>';
 
-    // Customers who ordered this month
     const custMap = new Map();
     orders.forEach((o) => {
       const key = customerKeyOf(o);
@@ -1933,8 +2488,8 @@
     });
     const custRows = Array.from(custMap.values()).sort((a, b) => b.spend - a.spend);
     document.getElementById('rCustomers').innerHTML = custRows.length
-      ? custRows.map((c) => `<div class="close-row"><span>${escapeHtml(c.name)} (${c.visits} visit${c.visits !== 1 ? 's' : ''})</span><span>${rupee(c.spend)}</span></div>`).join('')
-      : '<div class="close-row"><span>No named customers this month (walk-ins without name/mobile aren\'t tracked individually)</span><span></span></div>';
+      ? custRows.map((c) => `<div class="close-row"><span>${escapeHtml(c.name)} (${c.visits} order${c.visits !== 1 ? 's' : ''})</span><span>${rupee(c.spend)}</span></div>`).join('')
+      : '<div class="close-row"><span>No named customers in this period</span><span></span></div>';
   }
 
   /* ---------------- SEASONAL BUSINESS (separate ledger — not linked to the food menu/inventory) ---------------- */
@@ -1991,6 +2546,7 @@
           <span class="order-row__meta">${p.supplier ? escapeHtml(p.supplier) + ' · ' : ''}${p.dateKey}</span>
         </div>
         <div class="order-row__amount">${rupee(p.amount)}</div>
+        <button class="order-row__edit-order" data-id="${p.id}">Edit</button>
         <button class="order-row__delete" data-id="${p.id}" aria-label="Delete purchase">&times;</button>
       </div>`).join('') : '<div class="order-log__empty">No seasonal purchases logged yet.</div>';
     list.querySelectorAll('.order-row__delete').forEach((btn) => {
@@ -2006,7 +2562,43 @@
         }
       });
     });
+    list.querySelectorAll('.order-row__edit-order').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const p = all.find((x) => x.id === btn.dataset.id);
+        if (!p) return;
+        state.editingSeasonalPurchaseId = p.id;
+        document.getElementById('spDate').value = p.dateKey;
+        document.getElementById('spDateReadout').textContent = formatDateReadable(p.dateKey);
+        document.getElementById('spItemInput').value = p.itemName;
+        document.getElementById('spUnit').value = p.unit || '';
+        document.getElementById('spQty').value = p.qty;
+        document.getElementById('spRate').value = p.rate;
+        document.getElementById('spAmount').value = p.amount;
+        document.getElementById('spSupplier').value = p.supplier || '';
+        document.getElementById('spNotes').value = p.notes || '';
+        document.getElementById('spPayment').value = p.payment || 'Cash';
+        document.getElementById('saveSeasonalPurchaseBtn').textContent = 'Update Purchase';
+        document.getElementById('cancelEditSeasonalPurchaseBtn').hidden = false;
+      });
+    });
   }
+
+  function resetSeasonalPurchaseForm() {
+    state.editingSeasonalPurchaseId = null;
+    document.getElementById('spItemInput').value = '';
+    document.getElementById('spUnit').value = '';
+    document.getElementById('spQty').value = '';
+    document.getElementById('spRate').value = '';
+    document.getElementById('spAmount').value = '';
+    document.getElementById('spSupplier').value = '';
+    document.getElementById('spNotes').value = '';
+    document.getElementById('spPayment').value = 'Cash';
+    document.getElementById('spDate').value = todayKey();
+    document.getElementById('spDateReadout').textContent = formatDateReadable(todayKey());
+    document.getElementById('saveSeasonalPurchaseBtn').textContent = 'Save Purchase';
+    document.getElementById('cancelEditSeasonalPurchaseBtn').hidden = true;
+  }
+  document.getElementById('cancelEditSeasonalPurchaseBtn').addEventListener('click', resetSeasonalPurchaseForm);
 
   async function renderSeasonalSaleList() {
     const all = await dbGetAll('seasonalSales');
@@ -2019,6 +2611,7 @@
           <span class="order-row__meta">${s.customerName ? escapeHtml(s.customerName) + ' · ' : ''}${s.dateKey} · ${s.payment}</span>
         </div>
         <div class="order-row__amount">${rupee(s.amount)}</div>
+        <button class="order-row__edit-order" data-id="${s.id}">Edit</button>
         <button class="order-row__delete" data-id="${s.id}" aria-label="Delete sale">&times;</button>
       </div>`).join('') : '<div class="order-log__empty">No seasonal sales logged yet.</div>';
     list.querySelectorAll('.order-row__delete').forEach((btn) => {
@@ -2034,7 +2627,43 @@
         }
       });
     });
+    list.querySelectorAll('.order-row__edit-order').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const s = all.find((x) => x.id === btn.dataset.id);
+        if (!s) return;
+        state.editingSeasonalSaleId = s.id;
+        document.getElementById('ssDate').value = s.dateKey;
+        document.getElementById('ssDateReadout').textContent = formatDateReadable(s.dateKey);
+        document.getElementById('ssItemInput').value = s.itemName;
+        document.getElementById('ssUnit').value = s.unit || '';
+        document.getElementById('ssQty').value = s.qty;
+        document.getElementById('ssRate').value = s.rate;
+        document.getElementById('ssAmount').value = s.amount;
+        document.getElementById('ssCustomer').value = s.customerName || '';
+        document.getElementById('ssMobile').value = s.mobile || '';
+        document.getElementById('ssPayment').value = s.payment || 'Cash';
+        document.getElementById('saveSeasonalSaleBtn').textContent = 'Update Sale';
+        document.getElementById('cancelEditSeasonalSaleBtn').hidden = false;
+      });
+    });
   }
+
+  function resetSeasonalSaleForm() {
+    state.editingSeasonalSaleId = null;
+    document.getElementById('ssItemInput').value = '';
+    document.getElementById('ssUnit').value = '';
+    document.getElementById('ssQty').value = '';
+    document.getElementById('ssRate').value = '';
+    document.getElementById('ssAmount').value = '';
+    document.getElementById('ssCustomer').value = '';
+    document.getElementById('ssMobile').value = '';
+    document.getElementById('ssPayment').value = 'Cash';
+    document.getElementById('ssDate').value = todayKey();
+    document.getElementById('ssDateReadout').textContent = formatDateReadable(todayKey());
+    document.getElementById('saveSeasonalSaleBtn').textContent = 'Save Sale';
+    document.getElementById('cancelEditSeasonalSaleBtn').hidden = true;
+  }
+  document.getElementById('cancelEditSeasonalSaleBtn').addEventListener('click', resetSeasonalSaleForm);
 
   document.getElementById('saveSeasonalPurchaseBtn').addEventListener('click', async () => {
     const itemName = document.getElementById('spItemInput').value.trim();
@@ -2043,28 +2672,29 @@
     if (!qty) { toast('Enter a quantity'); return; }
     const rate = parseFloat(document.getElementById('spRate').value) || 0;
     const amount = parseFloat(document.getElementById('spAmount').value) || qty * rate;
+    const isEdit = !!state.editingSeasonalPurchaseId;
     try {
-      await dbPut('seasonalPurchases', {
-        id: uid(),
+      const record = {
+        id: state.editingSeasonalPurchaseId || uid(),
         dateKey: document.getElementById('spDate').value || todayKey(),
-        timestamp: Date.now(),
+        timestamp: isEdit ? (await dbGet('seasonalPurchases', state.editingSeasonalPurchaseId)).timestamp : Date.now(),
         itemName,
         unit: document.getElementById('spUnit').value.trim(),
         qty, rate, amount,
         supplier: document.getElementById('spSupplier').value.trim(),
         notes: document.getElementById('spNotes').value.trim(),
         payment: document.getElementById('spPayment').value,
-      });
-      document.getElementById('spItemInput').value = '';
-      document.getElementById('spUnit').value = '';
-      document.getElementById('spQty').value = '';
-      document.getElementById('spRate').value = '';
-      document.getElementById('spAmount').value = '';
-      document.getElementById('spSupplier').value = '';
-      document.getElementById('spNotes').value = '';
+      };
+      if (isEdit) {
+        const old = await dbGet('seasonalPurchases', state.editingSeasonalPurchaseId);
+        record.udharCleared = old.udharCleared;
+        record.udharClearedDate = old.udharClearedDate;
+      }
+      await dbPut('seasonalPurchases', record);
+      resetSeasonalPurchaseForm();
       await populateSeasonalItemDatalist();
       renderSeasonalPurchaseList();
-      toast('Purchase saved');
+      toast(isEdit ? 'Purchase updated' : 'Purchase saved');
     } catch (err) {
       console.error('Save seasonal purchase failed:', err);
       toast('Save failed — try again');
@@ -2078,28 +2708,29 @@
     if (!qty) { toast('Enter a quantity'); return; }
     const rate = parseFloat(document.getElementById('ssRate').value) || 0;
     const amount = parseFloat(document.getElementById('ssAmount').value) || qty * rate;
+    const isEdit = !!state.editingSeasonalSaleId;
     try {
-      await dbPut('seasonalSales', {
-        id: uid(),
+      const record = {
+        id: state.editingSeasonalSaleId || uid(),
         dateKey: document.getElementById('ssDate').value || todayKey(),
-        timestamp: Date.now(),
+        timestamp: isEdit ? (await dbGet('seasonalSales', state.editingSeasonalSaleId)).timestamp : Date.now(),
         itemName,
         unit: document.getElementById('ssUnit').value.trim(),
         qty, rate, amount,
         customerName: document.getElementById('ssCustomer').value.trim(),
         mobile: document.getElementById('ssMobile').value.trim(),
         payment: document.getElementById('ssPayment').value,
-      });
-      document.getElementById('ssItemInput').value = '';
-      document.getElementById('ssUnit').value = '';
-      document.getElementById('ssQty').value = '';
-      document.getElementById('ssRate').value = '';
-      document.getElementById('ssAmount').value = '';
-      document.getElementById('ssCustomer').value = '';
-      document.getElementById('ssMobile').value = '';
+      };
+      if (isEdit) {
+        const old = await dbGet('seasonalSales', state.editingSeasonalSaleId);
+        record.udharCleared = old.udharCleared;
+        record.udharClearedDate = old.udharClearedDate;
+      }
+      await dbPut('seasonalSales', record);
+      resetSeasonalSaleForm();
       await populateSeasonalItemDatalist();
       renderSeasonalSaleList();
-      toast('Sale saved');
+      toast(isEdit ? 'Sale updated' : 'Sale saved');
     } catch (err) {
       console.error('Save seasonal sale failed:', err);
       toast('Save failed — try again');
@@ -2242,12 +2873,12 @@
 
   // Marks one specific transaction as cleared (paid off), stamped with today's date,
   // rather than recording a generic lump payment against the running balance.
-  async function markUdharCleared(store, id) {
+  async function markUdharCleared(store, id, clearedDate) {
     try {
       const rec = await dbGet(store, id);
       if (!rec) return;
       rec.udharCleared = true;
-      rec.udharClearedDate = todayKey();
+      rec.udharClearedDate = clearedDate || todayKey();
       await dbPut(store, rec);
       await loadAllCreditData();
       toast('Marked cleared');
@@ -2265,6 +2896,7 @@
           <span class="order-row__meta">${item.date}</span>
         </div>
         <div class="order-row__amount">${rupee(item.amount)}</div>
+        <input type="date" class="clear-date-input" data-clear-date-for="${item.id}" value="${todayKey()}" />
         <button class="order-row__clear" data-store="${item.store}" data-id="${item.id}">Cleared</button>
       </div>`;
   }
@@ -2329,7 +2961,8 @@
       : '<div class="order-log__empty">Nothing pending — fully cleared.</div>';
     pendingEl.querySelectorAll('.order-row__clear').forEach((btn) => {
       btn.addEventListener('click', async () => {
-        await markUdharCleared(btn.dataset.store, btn.dataset.id);
+        const dateInput = pendingEl.querySelector(`[data-clear-date-for="${btn.dataset.id}"]`);
+        await markUdharCleared(btn.dataset.store, btn.dataset.id, dateInput ? dateInput.value : null);
         openSupplierModal(key);
         renderUdharTab();
       });
@@ -2439,17 +3072,29 @@
           <span class="order-row__meta">${c.orders} orders · AOV ${rupee(c.aov || (c.orders ? c.sales / c.orders : 0))} · Footfall ${c.footfall}</span>
         </div>
         <div class="order-row__amount">${rupee(c.sales)}</div>
-        <button class="item-row__edit" data-date="${c.dateKey}" style="margin-left:6px;">View</button>
+        <button class="item-row__edit" data-view-date="${c.dateKey}" style="margin-left:6px;">View</button>
+        <button class="order-row__edit-order" data-edit-date="${c.dateKey}">Edit</button>
       </div>
     `).join('');
-    list.querySelectorAll('[data-date]').forEach((btn) => {
-      btn.addEventListener('click', () => openClosingDetail(btn.dataset.date));
+    list.querySelectorAll('[data-view-date]').forEach((btn) => {
+      btn.addEventListener('click', () => openClosingDetail(btn.dataset.viewDate));
+    });
+    list.querySelectorAll('[data-edit-date]').forEach((btn) => {
+      btn.addEventListener('click', () => openClosingEdit(btn.dataset.editDate));
     });
   }
+
+  const CLOSING_FIELDS = [
+    ['footfall', 'Footfall'], ['buyingCustomers', 'Customers Attended'], ['orders', 'Orders'],
+    ['sales', 'Sales ₹'], ['offline', 'Offline ₹'], ['online', 'Online ₹'],
+    ['cash', 'Cash ₹'], ['upi', 'UPI ₹'], ['udhar', 'Udhar ₹'],
+    ['expenses', 'Expenses ₹'], ['purchases', 'Purchases ₹'], ['profit', 'Profit ₹'],
+  ];
 
   async function openClosingDetail(dateKey) {
     const c = await dbGet('closings', dateKey);
     if (!c) return;
+    state.editingClosingDate = null;
     const aov = c.aov !== undefined ? c.aov : (c.orders ? c.sales / c.orders : 0);
     document.getElementById('closingDetailTitle').textContent = c.dateKey;
     const rows = [
@@ -2469,13 +3114,47 @@
     document.getElementById('closingDetailRows').innerHTML = rows.map(([label, val]) =>
       `<div class="close-row"><span>${label}</span><span>${val}</span></div>`
     ).join('') + `<div class="close-row close-row--total"><span>Profit</span><span>${rupee(c.profit || 0)}</span></div>`;
-    if (c.offline === undefined) {
-      document.getElementById('closingDetailNote').hidden = false;
-    } else {
-      document.getElementById('closingDetailNote').hidden = true;
-    }
+    document.getElementById('closingDetailNote').hidden = c.offline !== undefined;
+    document.getElementById('closingDetailSaveBtn').hidden = true;
     document.getElementById('closingDetailBackdrop').hidden = false;
   }
+
+  async function openClosingEdit(dateKey) {
+    const c = await dbGet('closings', dateKey);
+    if (!c) return;
+    state.editingClosingDate = dateKey;
+    document.getElementById('closingDetailTitle').textContent = `Editing ${c.dateKey}`;
+    document.getElementById('closingDetailNote').hidden = true;
+    document.getElementById('closingDetailRows').innerHTML = CLOSING_FIELDS.map(([field, label]) => `
+      <div class="close-row">
+        <span>${label}</span>
+        <input type="number" step="0.01" data-closing-field="${field}" value="${c[field] || 0}" style="width:110px; text-align:right;" />
+      </div>
+    `).join('');
+    document.getElementById('closingDetailSaveBtn').hidden = false;
+    document.getElementById('closingDetailBackdrop').hidden = false;
+  }
+
+  document.getElementById('closingDetailSaveBtn').addEventListener('click', async () => {
+    if (!state.editingClosingDate) return;
+    try {
+      const c = await dbGet('closings', state.editingClosingDate);
+      if (!c) return;
+      document.querySelectorAll('#closingDetailRows [data-closing-field]').forEach((inp) => {
+        c[inp.dataset.closingField] = parseFloat(inp.value) || 0;
+      });
+      // AOV is derived, keep it consistent with the corrected sales/orders.
+      c.aov = c.orders ? c.sales / c.orders : 0;
+      await dbPut('closings', c);
+      toast('Closing updated');
+      document.getElementById('closingDetailBackdrop').hidden = true;
+      renderClosedHistory();
+    } catch (err) {
+      console.error('Save closing edit failed:', err);
+      toast('Save failed — try again');
+    }
+  });
+
   document.getElementById('closingDetailClose').addEventListener('click', () => {
     document.getElementById('closingDetailBackdrop').hidden = true;
   });
@@ -2545,6 +3224,7 @@
 
   /* ---------------- SETTINGS / RESET ---------------- */
   document.getElementById('settingsBtn').addEventListener('click', () => {
+    document.getElementById('appVersionLabel').textContent = APP_VERSION;
     document.getElementById('settingsModalBackdrop').hidden = false;
   });
   document.getElementById('settingsModalClose').addEventListener('click', () => {
@@ -2693,6 +3373,36 @@
       toast('Expenses CSV downloaded');
     } catch (err) {
       console.error('Expenses CSV export failed:', err);
+      toast('Export failed — try again');
+    }
+  });
+
+  document.getElementById('exportSeasonalPurchasesCsvBtn').addEventListener('click', async () => {
+    try {
+      const purchases = await dbGetAll('seasonalPurchases');
+      if (!purchases.length) { toast('No seasonal purchases to export yet'); return; }
+      purchases.sort((a, b) => a.timestamp - b.timestamp);
+      const headers = ['Date', 'Item', 'Unit', 'Qty', 'Rate', 'Amount', 'Supplier', 'Payment', 'Notes'];
+      const rows = purchases.map((p) => [p.dateKey, p.itemName, p.unit || '', p.qty, p.rate, p.amount, p.supplier || '', p.payment || '', p.notes || '']);
+      downloadCSV(`akash-food-point-seasonal-purchases-${todayKey()}.csv`, toCSV(headers, rows));
+      toast('Seasonal Purchases CSV downloaded');
+    } catch (err) {
+      console.error('Seasonal purchases CSV export failed:', err);
+      toast('Export failed — try again');
+    }
+  });
+
+  document.getElementById('exportSeasonalSalesCsvBtn').addEventListener('click', async () => {
+    try {
+      const sales = await dbGetAll('seasonalSales');
+      if (!sales.length) { toast('No seasonal sales to export yet'); return; }
+      sales.sort((a, b) => a.timestamp - b.timestamp);
+      const headers = ['Date', 'Item', 'Unit', 'Qty', 'Rate', 'Amount', 'Customer', 'Mobile', 'Payment'];
+      const rows = sales.map((s) => [s.dateKey, s.itemName, s.unit || '', s.qty, s.rate, s.amount, s.customerName || '', s.mobile || '', s.payment || '']);
+      downloadCSV(`akash-food-point-seasonal-sales-${todayKey()}.csv`, toCSV(headers, rows));
+      toast('Seasonal Sales CSV downloaded');
+    } catch (err) {
+      console.error('Seasonal sales CSV export failed:', err);
       toast('Export failed — try again');
     }
   });
