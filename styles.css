@@ -429,6 +429,34 @@ main#app { padding: 16px 16px 24px; max-width: 720px; margin: 0 auto; }
   justify-content: center;
 }
 .order-row__delete:active { transform: scale(0.92); background: rgba(225,67,43,0.28); }
+.order-row__edit-order {
+  flex: none;
+  padding: 0 12px;
+  height: 38px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 12.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.order-row__edit-order:active { transform: scale(0.96); }
+
+.edit-order-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: rgba(242,183,5,0.14);
+  border: 1px solid var(--turmeric);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  font-size: 12.5px;
+  color: var(--turmeric);
+  font-weight: 600;
+}
 .order-row__clear {
   flex: none;
   padding: 0 12px;
@@ -442,6 +470,18 @@ main#app { padding: 16px 16px 24px; max-width: 720px; margin: 0 auto; }
   white-space: nowrap;
 }
 .order-row__clear:active { transform: scale(0.96); background: rgba(76,175,109,0.3); }
+.clear-date-input {
+  flex: none;
+  width: 128px;
+  height: 38px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
 .order-row__cleared-tag {
   flex: none;
   font-size: 11px;
@@ -526,6 +566,29 @@ main#app { padding: 16px 16px 24px; max-width: 720px; margin: 0 auto; }
 }
 .menu-item-card.in-cart { border-color: var(--chili); }
 .menu-item-card__name { font-weight: 600; font-size: 14px; line-height: 1.25; }
+.menu-item-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  pointer-events: auto; /* stays clickable even when the card body is greyed out/disabled */
+}
+.sold-out-toggle {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.sold-out-toggle--off {
+  border-color: var(--success);
+  background: rgba(76,175,109,0.14);
+  color: var(--success);
+}
 .menu-item-card--unavailable { opacity: 0.4; pointer-events: none; }
 
 /* one row per sellable size (Full, or Full + Half) */
@@ -1054,7 +1117,7 @@ input:disabled {
   .ticket { max-width: 760px; }
 
   /* More tab: give the 7-way sub-nav and its content some breathing room */
-  .segmented--wide button { font-size: 13px; padding: 10px 14px; }
+  .segmented--wide button { font-size: 13.5px; }
 }
 @media (min-width: 960px) and (hover: none) {
   .btn:hover, .chip:hover, .tap-btn:hover, .tabbar__btn:hover,
@@ -1071,8 +1134,14 @@ input:disabled {
 .stat-card--alert { background: rgba(242,183,5,0.14); }
 
 /* Sub-nav inside "More" tab */
-.segmented--wide { margin-bottom: 14px; overflow-x: auto; }
-.segmented--wide button { white-space: nowrap; padding: 9px 12px; }
+.segmented--wide { margin-bottom: 14px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.segmented--wide button {
+  flex: none;
+  white-space: nowrap;
+  padding: 10px 16px;
+  overflow: visible;
+  text-overflow: clip;
+}
 .sub-panel[hidden] { display: none; }
 
 /* Purchase / Expense entry forms */
